@@ -93,6 +93,12 @@ export const toggleSplitAcknowledge = (splitId: string, state: string) =>
 export const getReconciledBalance = (accountId: string) =>
     fetchJSON<{ balance: number }>(`/accounts/${accountId}/reconciled-balance`);
 
+export const reconcileAccountSplits = (accountId: string, accountGuids: string[]) =>
+    fetchJSON<{ reconciled: number }>(`/accounts/${accountId}/reconcile`, {
+        method: 'POST',
+        body: JSON.stringify({ account_guids: accountGuids }),
+    });
+
 // Commodities
 export const getCommodities = () => fetchJSON<Commodity[]>('/commodities');
 

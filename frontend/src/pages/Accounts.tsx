@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getAccounts, deleteAccount } from '../api/client';
-import AccountTree from '../components/AccountTree';
+import { getAccounts, deleteAccount, reconcileAccountSplits } from '../api/client';
+import AccountTree, { buildTree, collectGuids } from '../components/AccountTree';
 import AccountForm from '../components/AccountForm';
 import type { Account } from '../types';
 import { t } from '../i18n';
@@ -34,6 +34,37 @@ export default function Accounts() {
             loadData();
         } catch (err: any) {
             alert(err.message || 'Failed to delete');
+        }
+    };
+
+    const handleReconcile = async (account: Account) => {
+        // Find the account in the tree to collect descendant GUIDs
+        const tree = buildTree(accounts);
+        const findInTree = (nodes: Account[]): Account | null => {
+            for (const node of nodes) {
+                if (node.guid === account.guid) return node;
+                if (node.children) {
+                    const found = findInTree(node.children);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+        const treeNode = findInTree(tree);
+        const guids = treeNode ? collectGuids(treeNode) : [account.guid];
+        const hasChildren = guids.length > 1;
+        const msg = hasChildren
+            ? t('accounts.confirmReconcileChildren')
+            : t('accounts.confirmReconcile');
+        if (!window.confirm(msg)) return;
+
+        try {
+            const result = await reconcileAccountSplits(account.guid, guids);
+            if (result.reconciled > 0) {
+                loadData();
+            }
+        } catch (err: any) {
+            alert(err.message || 'Failed to reconcile');
         }
     };
 
@@ -99,6 +130,7 @@ export default function Accounts() {
                     accounts={accounts}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
+                    onReconcile={handleReconcile}
                     showReconciled={showReconciled}
                 />
             </div>

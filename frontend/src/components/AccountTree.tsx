@@ -8,6 +8,7 @@ interface AccountTreeProps {
     accounts: Account[];
     onEdit?: (account: Account) => void;
     onDelete?: (account: Account) => void;
+    onReconcile?: (account: Account) => void;
     showReconciled?: boolean;
 }
 
@@ -33,15 +34,72 @@ function buildTree(accounts: Account[]): Account[] {
     return roots;
 }
 
-function TreeNode({ account, depth, onEdit, onDelete, showReconciled }: {
+/** Collect all GUIDs from a tree node and its descendants */
+function collectGuids(account: Account): string[] {
+    const guids = [account.guid];
+    if (account.children) {
+        for (const child of account.children) {
+            guids.push(...collectGuids(child));
+        }
+    }
+    return guids;
+}
+
+/** Action button with proper sizing and click handling */
+function ActionBtn({ icon, title, onClick, hoverColor }: {
+    icon: string;
+    title: string;
+    onClick: (e: React.MouseEvent) => void;
+    hoverColor: string;
+}) {
+    return (
+        <button
+            className="tree-action-btn"
+            title={title}
+            onClick={onClick}
+            style={{
+                background: 'none',
+                border: '1px solid transparent',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                color: 'var(--text-muted)',
+                padding: '2px 6px',
+                borderRadius: 4,
+                lineHeight: 1,
+                transition: 'all 0.15s',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minWidth: 24,
+                minHeight: 24,
+            }}
+            onMouseEnter={e => {
+                const el = e.currentTarget;
+                el.style.color = hoverColor;
+                el.style.borderColor = hoverColor + '44';
+                el.style.background = hoverColor + '11';
+            }}
+            onMouseLeave={e => {
+                const el = e.currentTarget;
+                el.style.color = 'var(--text-muted)';
+                el.style.borderColor = 'transparent';
+                el.style.background = 'none';
+            }}
+        >
+            {icon}
+        </button>
+    );
+}
+
+function TreeNode({ account, depth, onEdit, onDelete, onReconcile, showReconciled }: {
     account: Account;
     depth: number;
     onEdit?: (account: Account) => void;
     onDelete?: (account: Account) => void;
+    onReconcile?: (account: Account) => void;
     showReconciled: boolean;
 }) {
     const [expanded, setExpanded] = useState(depth < 2);
-    const [showActions, setShowActions] = useState(false);
     const navigate = useNavigate();
     const hasChildren = account.children && account.children.length > 0;
     const isRoot = account.account_type === 'ROOT';
@@ -50,7 +108,7 @@ function TreeNode({ account, depth, onEdit, onDelete, showReconciled }: {
         return (
             <>
                 {account.children?.map(child => (
-                    <TreeNode key={child.guid} account={child} depth={depth} onEdit={onEdit} onDelete={onDelete} showReconciled={showReconciled} />
+                    <TreeNode key={child.guid} account={child} depth={depth} onEdit={onEdit} onDelete={onDelete} onReconcile={onReconcile} showReconciled={showReconciled} />
                 ))}
             </>
         );
@@ -65,8 +123,6 @@ function TreeNode({ account, depth, onEdit, onDelete, showReconciled }: {
             <div
                 className="account-tree-row"
                 style={{ paddingLeft: `${12 + depth * 20}px` }}
-                onMouseEnter={() => setShowActions(true)}
-                onMouseLeave={() => setShowActions(false)}
             >
                 <span
                     className={`account-tree-toggle ${expanded ? 'expanded' : ''}`}
@@ -90,64 +146,59 @@ function TreeNode({ account, depth, onEdit, onDelete, showReconciled }: {
                     {account.placeholder && <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 6 }}>📁</span>}
                 </span>
 
-                {showActions && (
-                    <span className="account-actions" style={{ display: 'inline-flex', gap: 4, marginLeft: 8 }}>
-                        {onEdit && (
-                            <button
-                                className="btn-icon"
-                                title={t('accounts.editAccount')}
-                                onClick={(e) => { e.stopPropagation(); onEdit(account); }}
-                                style={{
-                                    background: 'none', border: 'none', cursor: 'pointer',
-                                    fontSize: '0.75rem', color: 'var(--text-muted)', padding: '2px 4px',
-                                    borderRadius: 4, transition: 'color 0.15s',
-                                }}
-                                onMouseEnter={e => { (e.target as HTMLElement).style.color = 'var(--color-primary)'; }}
-                                onMouseLeave={e => { (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
-                            >
-                                ✎
-                            </button>
-                        )}
-                        {onDelete && (
-                            <button
-                                className="btn-icon"
-                                title={t('accounts.deleteAccount')}
-                                onClick={(e) => { e.stopPropagation(); onDelete(account); }}
-                                style={{
-                                    background: 'none', border: 'none', cursor: 'pointer',
-                                    fontSize: '0.75rem', color: 'var(--text-muted)', padding: '2px 4px',
-                                    borderRadius: 4, transition: 'color 0.15s',
-                                }}
-                                onMouseEnter={e => { (e.target as HTMLElement).style.color = 'var(--color-expense)'; }}
-                                onMouseLeave={e => { (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
-                            >
-                                🗑
-                            </button>
-                        )}
-                    </span>
-                )}
+                {/* Action buttons — always in DOM, shown on row hover via CSS */}
+                <span className="account-actions" style={{ display: 'inline-flex', gap: 2, marginLeft: 8 }}>
+                    {onReconcile && (
+                        <ActionBtn
+                            icon="✓"
+                            title={t('accounts.reconcile')}
+                            onClick={(e) => { e.stopPropagation(); onReconcile(account); }}
+                            hoverColor="var(--color-income)"
+                        />
+                    )}
+                    {onEdit && (
+                        <ActionBtn
+                            icon="✎"
+                            title={t('accounts.editAccount')}
+                            onClick={(e) => { e.stopPropagation(); onEdit(account); }}
+                            hoverColor="var(--color-primary)"
+                        />
+                    )}
+                    {onDelete && (
+                        <ActionBtn
+                            icon="🗑"
+                            title={t('accounts.deleteAccount')}
+                            onClick={(e) => { e.stopPropagation(); onDelete(account); }}
+                            hoverColor="var(--color-expense)"
+                        />
+                    )}
+                </span>
 
                 {/* Last Reconciled */}
                 <span style={{
-                    fontSize: '0.75rem',
-                    color: account.last_reconciled ? 'var(--text-secondary)' : 'var(--text-muted)',
-                    minWidth: 90,
+                    fontSize: '0.72rem',
+                    color: 'var(--text-secondary)',
+                    width: 90,
                     textAlign: 'right',
                     marginLeft: 'auto',
-                    marginRight: 12,
-                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
                 }}>
-                    {account.last_reconciled ? formatDate(account.last_reconciled) : '—'}
+                    {account.last_reconciled ? formatDate(account.last_reconciled) : ''}
                 </span>
 
-                <span className="account-balance" style={{ color: displayBalance >= 0 ? 'var(--color-income)' : 'var(--color-expense)' }}>
+                <span className="account-balance" style={{
+                    color: displayBalance >= 0 ? 'var(--color-income)' : 'var(--color-expense)',
+                    width: 110,
+                    textAlign: 'right',
+                    flexShrink: 0,
+                }}>
                     {formatCurrency(displayBalance)}
                 </span>
             </div>
             {expanded && hasChildren && (
                 <ul className="account-children">
                     {account.children!.map(child => (
-                        <TreeNode key={child.guid} account={child} depth={depth + 1} onEdit={onEdit} onDelete={onDelete} showReconciled={showReconciled} />
+                        <TreeNode key={child.guid} account={child} depth={depth + 1} onEdit={onEdit} onDelete={onDelete} onReconcile={onReconcile} showReconciled={showReconciled} />
                     ))}
                 </ul>
             )}
@@ -155,7 +206,9 @@ function TreeNode({ account, depth, onEdit, onDelete, showReconciled }: {
     );
 }
 
-export default function AccountTree({ accounts, onEdit, onDelete, showReconciled = false }: AccountTreeProps) {
+export { buildTree, collectGuids };
+
+export default function AccountTree({ accounts, onEdit, onDelete, onReconcile, showReconciled = false }: AccountTreeProps) {
     const tree = buildTree(accounts);
 
     if (tree.length === 0) {
@@ -177,14 +230,14 @@ export default function AccountTree({ accounts, onEdit, onDelete, showReconciled
                 fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em',
                 color: 'var(--text-muted)', fontWeight: 600,
             }}>
-                <span style={{ minWidth: 90, textAlign: 'right', marginRight: 12 }}>{t('accounts.lastReconciled')}</span>
-                <span style={{ minWidth: 100, textAlign: 'right' }}>
+                <span style={{ width: 90, textAlign: 'right', flexShrink: 0 }}>{t('accounts.lastReconciled')}</span>
+                <span style={{ width: 110, textAlign: 'right', flexShrink: 0 }}>
                     {showReconciled ? t('accounts.reconciledBalance') : t('register.balance')}
                 </span>
             </div>
             <ul className="account-tree">
                 {tree.map(account => (
-                    <TreeNode key={account.guid} account={account} depth={0} onEdit={onEdit} onDelete={onDelete} showReconciled={showReconciled} />
+                    <TreeNode key={account.guid} account={account} depth={0} onEdit={onEdit} onDelete={onDelete} onReconcile={onReconcile} showReconciled={showReconciled} />
                 ))}
             </ul>
         </div>

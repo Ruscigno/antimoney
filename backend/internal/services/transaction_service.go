@@ -509,6 +509,28 @@ func (s *TransactionService) GetReconciledBalance(ctx context.Context, accountGU
 	return balance, nil
 }
 
+// ReconcileAccountSplits sets reconcile_state='y' for all unreconciled splits
+// belonging to the given account GUIDs. This is used to reconcile an account
+// and its children from the Chart of Accounts.
+func (s *TransactionService) ReconcileAccountSplits(ctx context.Context, accountGUIDs []string) (int64, error) {
+	bookGUID := auth.BookGUIDFromCtx(ctx)
+	if len(accountGUIDs) == 0 {
+		return 0, nil
+	}
+
+	// Build IN clause
+	result, err := s.pool.Exec(ctx,
+		`UPDATE splits SET reconcile_state = 'y'
+		 WHERE account_guid = ANY($1) AND reconcile_state != 'y' AND EXISTS (
+		   SELECT 1 FROM transactions t WHERE t.guid = splits.tx_guid AND t.book_guid = $2
+		 )`, accountGUIDs, bookGUID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile account splits: %w", err)
+	}
+	return result.RowsAffected(), nil
+}
+
 func normalizePostDate(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 11, 0, 0, 0, time.UTC)
 }

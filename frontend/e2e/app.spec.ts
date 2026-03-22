@@ -37,9 +37,9 @@ test.describe.serial('Antimoney E2E', () => {
         await page.goto(BASE);
         await page.waitForSelector('.stats-grid');
 
-        // All 4 summary cards should exist
+        // All 5 metric cards should exist (Net Worth + Assets + Liabilities + Income + Expenses)
         const cards = page.locator('.stat-card');
-        await expect(cards).toHaveCount(4);
+        await expect(cards).toHaveCount(5);
 
         // No card should show NaN
         const cardTexts = await cards.allTextContents();
@@ -62,10 +62,10 @@ test.describe.serial('Antimoney E2E', () => {
         await expect(page.locator('.nav-item', { hasText: 'Transactions' })).toBeVisible();
 
         // Dashboard summary cards
-        await expect(page.locator('.card-title', { hasText: 'Assets' })).toBeVisible();
-        await expect(page.locator('.card-title', { hasText: 'Liabilities' })).toBeVisible();
-        await expect(page.locator('.card-title', { hasText: 'Income' })).toBeVisible();
-        await expect(page.locator('.card-title', { hasText: 'Expenses' })).toBeVisible();
+        await expect(page.locator('.stat-card', { hasText: '🏦 Assets' })).toBeVisible();
+        await expect(page.locator('.stat-card', { hasText: '💳 Liabilities' })).toBeVisible();
+        await expect(page.locator('.stat-card', { hasText: '📈 Income' })).toBeVisible();
+        await expect(page.locator('.stat-card', { hasText: '📉 Expenses' })).toBeVisible();
         await expect(page.locator('text=Financial overview')).toBeVisible();
     });
 
@@ -221,7 +221,7 @@ test.describe.serial('Antimoney E2E', () => {
         await page.goto(BASE);
         await page.waitForSelector('.stats-grid');
 
-        const assetsCard = page.locator('.stat-card.asset .card-value');
+        const assetsCard = page.locator('.stat-card', { hasText: '🏦 Assets' });
         const assetsText = await assetsCard.textContent();
         expect(assetsText).not.toContain('NaN');
         // After creating a 5000 salary transaction, assets should be non-zero

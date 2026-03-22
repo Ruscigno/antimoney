@@ -27,6 +27,7 @@ func (h *AccountHandler) Routes() chi.Router {
 	r.Delete("/{id}", h.delete)
 	r.Get("/{id}/register", h.register)
 	r.Get("/{id}/reconciled-balance", h.reconciledBalance)
+	r.Post("/{id}/reconcile", h.reconcileAccount)
 	return r
 }
 
@@ -127,4 +128,25 @@ func (h *AccountHandler) reconciledBalance(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]float64{"balance": balance})
+}
+
+func (h *AccountHandler) reconcileAccount(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		AccountGUIDs []string `json:"account_guids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.AccountGUIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "account_guids required")
+		return
+	}
+
+	count, err := h.txSvc.ReconcileAccountSplits(r.Context(), req.AccountGUIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int64{"reconciled": count})
 }

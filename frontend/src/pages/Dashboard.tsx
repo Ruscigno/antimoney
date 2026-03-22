@@ -4,145 +4,272 @@ import type { Account, AccountType } from '../types';
 import { ACCOUNT_TYPE_COLORS } from '../types';
 import { t, formatCurrency } from '../i18n';
 
-interface CategorySummary {
-    label: string;
-    total: number;
-    reconciledTotal: number;
-    cssClass: string;
-    icon: string;
+/* ──────────────────────────────────────────────── Data layer ── */
+
+interface DashboardData {
+    assets: number;
+    liabilities: number;
+    income: number;
+    expenses: number;
+    rAssets: number;
+    rLiabilities: number;
+    rIncome: number;
+    rExpenses: number;
+    topAccounts: { name: string; value: number; rValue: number; color: string; type: AccountType }[];
+    expenseAccounts: { name: string; value: number; rValue: number; color: string }[];
+    incomeAccounts: { name: string; value: number; rValue: number; color: string }[];
 }
 
-/** Individual account with its balance for the bar chart */
-interface BarItem {
-    name: string;
-    value: number;
-    reconciledValue: number;
-    color: string;
-    accountType: AccountType;
-}
+const EXPENSE_PALETTE = [
+    '#ec4899', '#f43f5e', '#f97316', '#eab308', '#a855f7',
+    '#6366f1', '#14b8a6', '#06b6d4', '#84cc16', '#64748b',
+];
 
-function computeSummaries(accounts: Account[]): {
-    summaries: CategorySummary[];
-    barItems: BarItem[];
-} {
-    const sums: Record<string, number> = {
-        ASSET: 0, BANK: 0, CASH: 0,
-        LIABILITY: 0, CREDIT: 0,
-        INCOME: 0,
-        EXPENSE: 0,
-    };
-    const reconSums: Record<string, number> = { ...sums };
-    Object.keys(reconSums).forEach(k => reconSums[k] = 0);
+function computeDashboard(accounts: Account[]): DashboardData {
+    const sums: Record<string, number> = { ASSET: 0, BANK: 0, CASH: 0, LIABILITY: 0, CREDIT: 0, INCOME: 0, EXPENSE: 0 };
+    const rSums: Record<string, number> = { ...sums };
+    Object.keys(rSums).forEach(k => rSums[k] = 0);
 
-    const bars: BarItem[] = [];
+    const topAccounts: DashboardData['topAccounts'] = [];
+    const expenseAccounts: DashboardData['expenseAccounts'] = [];
+    const incomeAccounts: DashboardData['incomeAccounts'] = [];
 
     accounts.forEach(a => {
         if (a.account_type in sums) {
             sums[a.account_type] += (a.balance || 0);
-            reconSums[a.account_type] += (a.reconciled_balance || 0);
+            rSums[a.account_type] += (a.reconciled_balance || 0);
         }
-        // Only show non-placeholder leaf accounts with non-zero balance in bar chart
-        if (!a.placeholder && a.account_type !== 'ROOT' && a.account_type !== 'EQUITY') {
-            const val = Math.abs(a.balance || 0);
-            const rVal = Math.abs(a.reconciled_balance || 0);
-            if (val > 0.005 || rVal > 0.005) {
-                bars.push({
-                    name: a.name,
-                    value: val,
-                    reconciledValue: rVal,
-                    color: ACCOUNT_TYPE_COLORS[a.account_type] || '#64748b',
-                    accountType: a.account_type,
-                });
-            }
+        if (a.placeholder || a.account_type === 'ROOT' || a.account_type === 'EQUITY') return;
+
+        const val = Math.abs(a.balance || 0);
+        const rVal = Math.abs(a.reconciled_balance || 0);
+        if (val > 0.005 || rVal > 0.005) {
+            topAccounts.push({
+                name: a.name, value: val, rValue: rVal,
+                color: ACCOUNT_TYPE_COLORS[a.account_type] || '#64748b',
+                type: a.account_type,
+            });
+        }
+        if (a.account_type === 'EXPENSE' && val > 0.005) {
+            expenseAccounts.push({ name: a.name, value: val, rValue: rVal, color: '' });
+        }
+        if (a.account_type === 'INCOME' && val > 0.005) {
+            incomeAccounts.push({ name: a.name, value: val, rValue: rVal, color: '' });
         }
     });
 
-    const assets = sums.ASSET + sums.BANK + sums.CASH;
-    const liabilities = sums.LIABILITY + sums.CREDIT;
-    const income = Math.abs(sums.INCOME);
-    const expenses = sums.EXPENSE;
+    // Assign palette colors to expense accounts
+    expenseAccounts.sort((a, b) => b.value - a.value);
+    expenseAccounts.forEach((e, i) => e.color = EXPENSE_PALETTE[i % EXPENSE_PALETTE.length]);
 
-    const rAssets = reconSums.ASSET + reconSums.BANK + reconSums.CASH;
-    const rLiabilities = reconSums.LIABILITY + reconSums.CREDIT;
-    const rIncome = Math.abs(reconSums.INCOME);
-    const rExpenses = reconSums.EXPENSE;
+    incomeAccounts.sort((a, b) => b.value - a.value);
+    incomeAccounts.forEach((e, i) => e.color = EXPENSE_PALETTE[i % EXPENSE_PALETTE.length]);
+
+    topAccounts.sort((a, b) => b.value - a.value);
 
     return {
-        summaries: [
-            { label: t('dashboard.assets'), total: assets, reconciledTotal: rAssets, cssClass: 'asset', icon: '🏦' },
-            { label: t('dashboard.liabilities'), total: Math.abs(liabilities), reconciledTotal: Math.abs(rLiabilities), cssClass: 'liability', icon: '💳' },
-            { label: t('dashboard.income'), total: income, reconciledTotal: rIncome, cssClass: 'income', icon: '📈' },
-            { label: t('dashboard.expenses'), total: expenses, reconciledTotal: rExpenses, cssClass: 'expense', icon: '📉' },
-        ],
-        barItems: bars.sort((a, b) => b.value - a.value).slice(0, 8),
+        assets: sums.ASSET + sums.BANK + sums.CASH,
+        liabilities: Math.abs(sums.LIABILITY + sums.CREDIT),
+        income: Math.abs(sums.INCOME),
+        expenses: sums.EXPENSE,
+        rAssets: rSums.ASSET + rSums.BANK + rSums.CASH,
+        rLiabilities: Math.abs(rSums.LIABILITY + rSums.CREDIT),
+        rIncome: Math.abs(rSums.INCOME),
+        rExpenses: rSums.EXPENSE,
+        topAccounts: topAccounts.slice(0, 10),
+        expenseAccounts,
+        incomeAccounts,
     };
 }
 
-/** Simple horizontal bar chart using SVG */
-function BarChart({ items, showReconciled }: { items: BarItem[]; showReconciled: boolean }) {
-    if (items.length === 0) return null;
+/* ──────────────────────────────────────────────── SVG Charts ── */
 
-    const maxVal = Math.max(...items.map(i => showReconciled ? i.reconciledValue : i.value), 1);
-    const barH = 28;
-    const gap = 6;
-    const labelW = 130;
-    const valueW = 90;
-    const chartW = 400;
-    const totalH = items.length * (barH + gap);
+/** Multi-segment donut chart */
+function SegmentDonut({ segments, size = 120, thickness = 14 }: {
+    segments: { value: number; color: string; label: string }[];
+    size?: number;
+    thickness?: number;
+}) {
+    const r = (size - thickness) / 2;
+    const cx = size / 2, cy = size / 2;
+    const circumference = 2 * Math.PI * r;
+    const total = segments.reduce((s, seg) => s + seg.value, 0);
+    let offset = 0;
+
+    if (total === 0) {
+        return (
+            <svg viewBox={`0 0 ${size} ${size}`} style={{ width: size, height: size }}>
+                <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--bg-tertiary)" strokeWidth={thickness} />
+            </svg>
+        );
+    }
 
     return (
-        <svg viewBox={`0 0 ${labelW + chartW + valueW + 20} ${totalH + 10}`} style={{ width: '100%', height: totalH + 10 }}>
-            {items.map((item, i) => {
-                const val = showReconciled ? item.reconciledValue : item.value;
-                const barW = (val / maxVal) * chartW;
-                const y = i * (barH + gap) + 5;
+        <svg viewBox={`0 0 ${size} ${size}`} style={{ width: size, height: size }}>
+            <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--bg-tertiary)" strokeWidth={thickness} />
+            {segments.map((seg, i) => {
+                const pct = seg.value / total;
+                const dashLen = pct * circumference;
+                const dashOff = -offset * circumference;
+                offset += pct;
                 return (
-                    <g key={item.name + i}>
-                        {/* Label */}
-                        <text x={labelW - 8} y={y + barH / 2 + 4} textAnchor="end"
-                            fill="var(--text-secondary)" fontSize="11" fontFamily="var(--font-sans, Inter, sans-serif)">
-                            {item.name.length > 16 ? item.name.slice(0, 15) + '…' : item.name}
-                        </text>
-                        {/* Bar background */}
-                        <rect x={labelW} y={y + 2} width={chartW} height={barH - 4} rx={4}
-                            fill="var(--bg-tertiary)" />
-                        {/* Bar fill — animated */}
-                        <rect x={labelW} y={y + 2} width={barW} height={barH - 4} rx={4}
-                            fill={item.color} opacity={0.85}>
-                            <animate attributeName="width" from="0" to={barW} dur="0.6s" fill="freeze" />
-                        </rect>
-                        {/* Value */}
-                        <text x={labelW + chartW + 8} y={y + barH / 2 + 4} textAnchor="start"
-                            fill="var(--text-primary)" fontSize="11" fontWeight="600"
-                            fontFamily="var(--font-sans, Inter, sans-serif)">
-                            {formatCurrency(val)}
-                        </text>
-                    </g>
+                    <circle key={i} cx={cx} cy={cy} r={r} fill="none"
+                        stroke={seg.color} strokeWidth={thickness}
+                        strokeDasharray={`${dashLen} ${circumference - dashLen}`}
+                        strokeDashoffset={dashOff}
+                        strokeLinecap="butt"
+                        transform={`rotate(-90 ${cx} ${cy})`}
+                        style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                    />
                 );
             })}
         </svg>
     );
 }
 
-/** Mini donut chart for net worth visualization */
-function DonutChart({ value, max, color }: { value: number; max: number; color: string }) {
-    const r = 38;
-    const circumference = 2 * Math.PI * r;
-    const pct = max > 0 ? Math.min(value / max, 1) : 0;
-    const dashLen = pct * circumference;
+/** Horizontal bar chart */
+function HorizBars({ items }: { items: { label: string; value: number; color: string }[] }) {
+    if (items.length === 0) {
+        return <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: 20 }}>{t('dashboard.noData')}</div>;
+    }
+    const maxVal = Math.max(...items.map(i => i.value), 1);
 
     return (
-        <svg viewBox="0 0 100 100" style={{ width: 90, height: 90 }}>
-            <circle cx="50" cy="50" r={r} fill="none" stroke="var(--bg-tertiary)" strokeWidth="8" />
-            <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="8"
-                strokeDasharray={`${dashLen} ${circumference}`}
-                strokeLinecap="round" transform="rotate(-90 50 50)">
-                <animate attributeName="stroke-dasharray" from={`0 ${circumference}`}
-                    to={`${dashLen} ${circumference}`} dur="0.8s" fill="freeze" />
-            </circle>
-        </svg>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {items.map((item, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ minWidth: 110, fontSize: '0.72rem', color: 'var(--text-secondary)', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {item.label.length > 15 ? item.label.slice(0, 14) + '…' : item.label}
+                    </span>
+                    <div style={{ flex: 1, height: 18, background: 'var(--bg-tertiary)', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
+                        <div style={{
+                            height: '100%', borderRadius: 4,
+                            background: item.color, opacity: 0.85,
+                            width: `${(item.value / maxVal) * 100}%`,
+                            transition: 'width 0.5s ease',
+                        }} />
+                    </div>
+                    <span style={{ minWidth: 80, fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>
+                        {formatCurrency(item.value)}
+                    </span>
+                </div>
+            ))}
+        </div>
     );
 }
+
+/** Cash flow comparison bars (income vs expenses) */
+function CashFlowBars({ income, expenses }: { income: number; expenses: number }) {
+    const max = Math.max(income, expenses, 1);
+    const net = income - expenses;
+
+    return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Income bar */}
+            <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-income)', fontWeight: 600 }}>
+                        ↓ {t('dashboard.moneyIn')}
+                    </span>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-income)' }}>
+                        {formatCurrency(income)}
+                    </span>
+                </div>
+                <div style={{ height: 24, background: 'var(--bg-tertiary)', borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{
+                        height: '100%', borderRadius: 6,
+                        background: 'linear-gradient(90deg, var(--color-income), #16a34a)',
+                        width: `${(income / max) * 100}%`,
+                        transition: 'width 0.5s ease',
+                    }} />
+                </div>
+            </div>
+            {/* Expenses bar */}
+            <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-expense)', fontWeight: 600 }}>
+                        ↑ {t('dashboard.moneyOut')}
+                    </span>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-expense)' }}>
+                        {formatCurrency(expenses)}
+                    </span>
+                </div>
+                <div style={{ height: 24, background: 'var(--bg-tertiary)', borderRadius: 6, overflow: 'hidden' }}>
+                    <div style={{
+                        height: '100%', borderRadius: 6,
+                        background: 'linear-gradient(90deg, var(--color-expense), #dc2626)',
+                        width: `${(expenses / max) * 100}%`,
+                        transition: 'width 0.5s ease',
+                    }} />
+                </div>
+            </div>
+            {/* Net line */}
+            <div style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '8px 12px', borderRadius: 6,
+                background: net >= 0 ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${net >= 0 ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'}`,
+            }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    {net >= 0 ? '📈' : '📉'} Net
+                </span>
+                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: net >= 0 ? 'var(--color-income)' : 'var(--color-expense)' }}>
+                    {net >= 0 ? '+' : ''}{formatCurrency(net)}
+                </span>
+            </div>
+        </div>
+    );
+}
+
+/* ──────────────────────────────────────────────── Toggle ── */
+
+function ToggleGroup({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+    const btnStyle = (active: boolean): React.CSSProperties => ({
+        padding: '5px 12px', fontSize: '0.72rem', fontWeight: 500,
+        border: 'none', cursor: 'pointer',
+        background: active ? 'var(--color-primary)' : 'transparent',
+        color: active ? '#fff' : 'var(--text-muted)',
+        transition: 'all 0.15s',
+    });
+    return (
+        <div style={{
+            display: 'inline-flex', borderRadius: 'var(--radius-sm)',
+            border: '1px solid var(--border-color)', overflow: 'hidden',
+        }}>
+            <button onClick={() => onChange(false)} style={btnStyle(!value)}>{t('dashboard.total')}</button>
+            <button onClick={() => onChange(true)} style={btnStyle(value)}>{t('dashboard.reconciled')}</button>
+        </div>
+    );
+}
+
+/* ──────────────────────────────────────────────── Metric Card ── */
+
+function MetricCard({ icon, label, value, colorVar, small }: {
+    icon: string; label: string; value: number; colorVar: string; small?: boolean;
+}) {
+    return (
+        <div className="stat-card" style={{
+            display: 'flex', flexDirection: 'column', gap: 2,
+            padding: small ? '10px 14px' : '14px 18px',
+            background: 'var(--bg-secondary)',
+            borderRadius: 'var(--radius-md)',
+            borderLeft: `3px solid var(--color-${colorVar})`,
+            minWidth: 0,
+        }}>
+            <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+                {icon} {label}
+            </span>
+            <span style={{
+                fontSize: small ? '1rem' : '1.15rem', fontWeight: 700,
+                color: value >= 0 ? 'var(--text-primary)' : 'var(--color-expense)',
+            }}>
+                {formatCurrency(value)}
+            </span>
+        </div>
+    );
+}
+
+/* ──────────────────────────────────────────────── Main ── */
 
 export default function Dashboard() {
     const [accounts, setAccounts] = useState<Account[]>([]);
@@ -156,98 +283,194 @@ export default function Dashboard() {
             .finally(() => setLoading(false));
     }, []);
 
-    const { summaries, barItems } = useMemo(() => computeSummaries(accounts), [accounts]);
+    const data = useMemo(() => computeDashboard(accounts), [accounts]);
 
     if (loading) {
         return <div className="loading"><div className="loading-spinner" />{t('common.loading')}</div>;
     }
 
-    const displaySummaries = summaries.map(s => ({
-        ...s,
-        displayValue: showReconciled ? s.reconciledTotal : s.total,
+    const assets = showReconciled ? data.rAssets : data.assets;
+    const liab = showReconciled ? data.rLiabilities : data.liabilities;
+    const income = showReconciled ? data.rIncome : data.income;
+    const expenses = showReconciled ? data.rExpenses : data.expenses;
+    const netWorth = assets - liab;
+
+    // Donut segments for expense breakdown
+    const expenseSegments = data.expenseAccounts.map(e => ({
+        value: showReconciled ? e.rValue : e.value,
+        color: e.color,
+        label: e.name,
     }));
 
-    const assetVal = showReconciled ? summaries[0].reconciledTotal : summaries[0].total;
-    const liabVal = showReconciled ? summaries[1].reconciledTotal : summaries[1].total;
-    const netWorth = assetVal - liabVal;
-    const totalAbs = assetVal + liabVal;
+    // Top 10 accounts bar data
+    const topItems = data.topAccounts.map(a => ({
+        label: a.name,
+        value: showReconciled ? a.rValue : a.value,
+        color: a.color,
+    }));
 
     return (
         <div>
-            {/* Header with toggle */}
+            {/* Header */}
             <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                     <h1 className="page-title">{t('dashboard.title')}</h1>
                     <p className="page-subtitle">{t('dashboard.subtitle')}</p>
                 </div>
-                <div
-                    className="toggle-group"
-                    style={{
-                        display: 'inline-flex', borderRadius: 'var(--radius-sm)',
-                        border: '1px solid var(--border-color)', overflow: 'hidden',
-                    }}
-                >
-                    <button
-                        onClick={() => setShowReconciled(false)}
-                        style={{
-                            padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
-                            border: 'none', cursor: 'pointer',
-                            background: !showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                            color: !showReconciled ? '#fff' : 'var(--text-secondary)',
-                            transition: 'all 0.15s',
-                        }}
-                    >
-                        {t('dashboard.total')}
-                    </button>
-                    <button
-                        onClick={() => setShowReconciled(true)}
-                        style={{
-                            padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
-                            border: 'none', cursor: 'pointer',
-                            background: showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                            color: showReconciled ? '#fff' : 'var(--text-secondary)',
-                            transition: 'all 0.15s',
-                        }}
-                    >
-                        {t('dashboard.reconciled')}
-                    </button>
-                </div>
+                <ToggleGroup value={showReconciled} onChange={setShowReconciled} />
             </div>
 
-            {/* Summary cards */}
-            <div className="stats-grid">
-                {displaySummaries.map(s => (
-                    <div key={s.label} className={`card stat-card ${s.cssClass}`}>
-                        <div className="card-title">{s.icon} {s.label}</div>
-                        <div className={`card-value ${s.displayValue >= 0 ? 'positive' : 'negative'}`}>
-                            {formatCurrency(s.displayValue)}
-                        </div>
-                    </div>
-                ))}
-            </div>
-
-            {/* Main content: net worth + chart */}
-            <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 20, marginTop: 4 }}>
-                {/* Net Worth card with donut */}
-                <div className="card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '28px 20px' }}>
-                    <DonutChart value={assetVal} max={totalAbs || 1} color={netWorth >= 0 ? 'var(--color-income)' : 'var(--color-expense)'} />
-                    <div className="card-title" style={{ marginTop: 12, fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>
+            {/* ── Row 1: Compact metric cards ── */}
+            <div className="stats-grid" style={{
+                display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
+                gap: 12, marginBottom: 20,
+            }}>
+                <div className="stat-card" style={{
+                    position: 'relative', overflow: 'hidden',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    justifyContent: 'center', padding: '14px 10px',
+                    background: netWorth >= 0 ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)',
+                    border: `1px solid ${netWorth >= 0 ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'}`,
+                    borderRadius: 'var(--radius-md)',
+                }}>
+                    <span className="card-title" style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
                         💰 {t('dashboard.netWorth')}
-                    </div>
-                    <div className={`card-value ${netWorth >= 0 ? 'positive' : 'negative'}`} style={{ fontSize: '1.8rem', marginTop: 4 }}>
+                    </span>
+                    <span className="card-value" style={{
+                        fontSize: '1.3rem', fontWeight: 700, marginTop: 2,
+                        color: netWorth >= 0 ? 'var(--color-income)' : 'var(--color-expense)',
+                    }}>
                         {formatCurrency(netWorth)}
-                    </div>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: 6, textAlign: 'center' }}>
+                    </span>
+                    <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: 1 }}>
                         {t('dashboard.netWorthDesc')}
-                    </p>
+                    </span>
+                </div>
+                <MetricCard icon="🏦" label={t('dashboard.assets')} value={assets} colorVar="asset" small />
+                <MetricCard icon="💳" label={t('dashboard.liabilities')} value={liab} colorVar="liability" small />
+                <MetricCard icon="📈" label={t('dashboard.income')} value={income} colorVar="income" small />
+                <MetricCard icon="📉" label={t('dashboard.expenses')} value={expenses} colorVar="expense" small />
+            </div>
+
+            {/* ── Row 2: Cash Flow + Expense Breakdown ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                {/* Cash Flow */}
+                <div className="card" style={{ padding: '18px 20px' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                        💸 {t('dashboard.cashFlow')}
+                    </div>
+                    <CashFlowBars income={income} expenses={expenses} />
                 </div>
 
-                {/* Bar chart */}
-                <div className="card" style={{ padding: '20px 24px', overflow: 'hidden' }}>
-                    <div className="card-title" style={{ marginBottom: 16, fontSize: '0.85rem' }}>
+                {/* Expense Breakdown Donut */}
+                <div className="card" style={{ padding: '18px 20px' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                        🍩 {t('dashboard.expenseBreakdown')}
+                    </div>
+                    {expenseSegments.length === 0 ? (
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: 30 }}>
+                            {t('dashboard.noData')}
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+                            <SegmentDonut segments={expenseSegments} size={130} thickness={16} />
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 0 }}>
+                                {data.expenseAccounts.slice(0, 6).map((e, i) => {
+                                    const val = showReconciled ? e.rValue : e.value;
+                                    return (
+                                        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem' }}>
+                                            <span style={{ width: 8, height: 8, borderRadius: '50%', background: e.color, flexShrink: 0 }} />
+                                            <span style={{ color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                {e.name}
+                                            </span>
+                                            <span style={{ fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
+                                                {formatCurrency(val)}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* ── Row 3: Top Accounts + Balance Overview ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                {/* Top 10 Accounts */}
+                <div className="card" style={{ padding: '18px 20px' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                        🏆 {t('dashboard.topAccounts')}
+                    </div>
+                    <HorizBars items={topItems} />
+                </div>
+
+                {/* Balance Overview: assets vs liabilities visual */}
+                <div className="card" style={{ padding: '18px 20px' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                         📊 {t('dashboard.balanceOverview')}
                     </div>
-                    <BarChart items={barItems} showReconciled={showReconciled} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        {/* Net worth donut + breakdown */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+                            <SegmentDonut
+                                segments={[
+                                    { value: assets, color: 'var(--color-income)', label: t('dashboard.assets') },
+                                    { value: liab, color: 'var(--color-expense)', label: t('dashboard.liabilities') },
+                                ]}
+                                size={100}
+                                thickness={12}
+                            />
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                                {/* Asset/Liability bars */}
+                                {[
+                                    { label: t('dashboard.assets'), val: assets, color: 'var(--color-income)' },
+                                    { label: t('dashboard.liabilities'), val: liab, color: 'var(--color-expense)' },
+                                ].map((item, i) => {
+                                    const max = Math.max(assets, liab, 1);
+                                    return (
+                                        <div key={i}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500 }}>{item.label}</span>
+                                                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: item.color }}>{formatCurrency(item.val)}</span>
+                                            </div>
+                                            <div style={{ height: 10, background: 'var(--bg-tertiary)', borderRadius: 5, overflow: 'hidden' }}>
+                                                <div style={{
+                                                    height: '100%', borderRadius: 5,
+                                                    background: item.color, opacity: 0.8,
+                                                    width: `${(item.val / max) * 100}%`,
+                                                    transition: 'width 0.5s ease',
+                                                }} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {/* Income/Expense mini bars */}
+                                {[
+                                    { label: t('dashboard.income'), val: income, color: '#8b5cf6' },
+                                    { label: t('dashboard.expenses'), val: expenses, color: '#ec4899' },
+                                ].map((item, i) => {
+                                    const max = Math.max(income, expenses, 1);
+                                    return (
+                                        <div key={`ie-${i}`}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                                                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500 }}>{item.label}</span>
+                                                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: item.color }}>{formatCurrency(item.val)}</span>
+                                            </div>
+                                            <div style={{ height: 10, background: 'var(--bg-tertiary)', borderRadius: 5, overflow: 'hidden' }}>
+                                                <div style={{
+                                                    height: '100%', borderRadius: 5,
+                                                    background: item.color, opacity: 0.8,
+                                                    width: `${(item.val / max) * 100}%`,
+                                                    transition: 'width 0.5s ease',
+                                                }} />
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>

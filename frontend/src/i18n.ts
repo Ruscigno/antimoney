@@ -23,6 +23,12 @@ const translations: Record<Locale, Record<string, string>> = {
         'dashboard.total': 'Total',
         'dashboard.reconciled': 'Reconciled',
         'dashboard.balanceOverview': 'Balance Overview',
+        'dashboard.cashFlow': 'Cash Flow',
+        'dashboard.moneyIn': 'Money In',
+        'dashboard.moneyOut': 'Money Out',
+        'dashboard.expenseBreakdown': 'Expense Breakdown',
+        'dashboard.topAccounts': 'Top Accounts',
+        'dashboard.noData': 'No data yet',
 
         // Accounts
         'accounts.title': 'Chart of Accounts',
@@ -45,6 +51,9 @@ const translations: Record<Locale, Record<string, string>> = {
         'accounts.nameRequired': 'Account name is required',
         'accounts.lastReconciled': 'Last Reconciled',
         'accounts.reconciledBalance': 'Reconciled',
+        'accounts.reconcile': 'Reconcile',
+        'accounts.confirmReconcile': 'Reconcile all transactions in this account?',
+        'accounts.confirmReconcileChildren': 'Reconcile all transactions in this account and its child accounts?',
 
         // Register
         'register.date': 'Date',
@@ -169,6 +178,12 @@ const translations: Record<Locale, Record<string, string>> = {
         'dashboard.total': 'Total',
         'dashboard.reconciled': 'Reconciliado',
         'dashboard.balanceOverview': 'Visão de Saldos',
+        'dashboard.cashFlow': 'Fluxo de Caixa',
+        'dashboard.moneyIn': 'Entradas',
+        'dashboard.moneyOut': 'Saídas',
+        'dashboard.expenseBreakdown': 'Despesas por Categoria',
+        'dashboard.topAccounts': 'Contas Principais',
+        'dashboard.noData': 'Sem dados',
         'accounts.title': 'Plano de Contas',
         'accounts.subtitle': 'Estrutura hierárquica de contas',
         'accounts.noAccounts': 'Nenhuma conta encontrada',
@@ -189,6 +204,9 @@ const translations: Record<Locale, Record<string, string>> = {
         'accounts.nameRequired': 'Nome da conta é obrigatório',
         'accounts.lastReconciled': 'Última Reconciliação',
         'accounts.reconciledBalance': 'Reconciliado',
+        'accounts.reconcile': 'Reconciliar',
+        'accounts.confirmReconcile': 'Reconciliar todas as transações desta conta?',
+        'accounts.confirmReconcileChildren': 'Reconciliar todas as transações desta conta e das contas filhas?',
         'register.date': 'Data',
         'register.num': '#',
         'register.description': 'Descrição',
@@ -315,11 +333,10 @@ export function formatCurrency(value: number): string {
 
 export function formatDate(dateStr: string): string {
     const d = new Date(dateStr);
-    return d.toLocaleDateString(currentLocale === 'pt-BR' ? 'pt-BR' : 'en-US', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-    });
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
 }
 
 export function formatDateShort(dateStr: string): string {
