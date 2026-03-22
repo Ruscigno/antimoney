@@ -119,7 +119,21 @@ function TreeNode({ account, depth, onEdit, onDelete, onReconcile, showReconcile
     onReconcile?: (account: Account) => void;
     showReconciled: boolean;
 }) {
-    const [expanded, setExpanded] = useState(depth < 2);
+    // Persistent expanded state
+    const storageKey = `account-expanded-${account.guid}`;
+    const [expanded, setExpanded] = useState(() => {
+        const saved = localStorage.getItem(storageKey);
+        if (saved !== null) return saved === 'true';
+        return depth < 2;
+    });
+
+    const toggleExpanded = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        const newState = !expanded;
+        setExpanded(newState);
+        localStorage.setItem(storageKey, String(newState));
+    };
+
     const navigate = useNavigate();
     const hasChildren = account.children && account.children.length > 0;
     const isRoot = account.account_type === 'ROOT';
@@ -137,8 +151,13 @@ function TreeNode({ account, depth, onEdit, onDelete, onReconcile, showReconcile
     const color = ACCOUNT_TYPE_COLORS[account.account_type] || '#64748b';
     const typeLabel = t(`type.${account.account_type}` as any);
     const displayBalance = showReconciled ? (account.aggregated_reconciled_balance || 0) : (account.aggregated_balance || 0);
-    const isZero = Math.abs(displayBalance) < 0.005;
-    const finalBalance = isZero ? 0 : displayBalance;
+    
+    // Credit-normal accounts (Liabilities, Income, Equity) are shown negated to the user
+    const isCreditNormal = ['LIABILITY', 'CREDIT', 'INCOME', 'EQUITY'].includes(account.account_type);
+    const displayedValue = isCreditNormal ? -displayBalance : displayBalance;
+    
+    const isZero = Math.abs(displayedValue) < 0.005;
+    const finalBalance = isZero ? 0 : displayedValue;
 
     return (
         <li className="account-tree-item">
@@ -148,7 +167,7 @@ function TreeNode({ account, depth, onEdit, onDelete, onReconcile, showReconcile
             >
                 <span
                     className={`account-tree-toggle ${expanded ? 'expanded' : ''}`}
-                    onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                    onClick={toggleExpanded}
                     style={{ visibility: hasChildren ? 'visible' : 'hidden' }}
                 >
                     ▶

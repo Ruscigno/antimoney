@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { getAccount, getAccountRegister, deleteTransaction } from '../api/client';
+import { getAccount, getAccountRegister, deleteTransaction, getAccounts } from '../api/client';
 import Register from '../components/Register';
 import TransactionForm from '../components/TransactionForm';
 import ReconcileWizard from '../components/ReconcileWizard';
+import AccountBreadcrumbs from '../components/AccountBreadcrumbs';
 import type { Account, RegisterEntry } from '../types';
 import { t } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
@@ -11,6 +12,7 @@ import { useShortcut } from '../hooks/useShortcuts';
 export default function AccountRegister() {
     const { id } = useParams<{ id: string }>();
     const [account, setAccount] = useState<Account | null>(null);
+    const [allAccounts, setAllAccounts] = useState<Account[]>([]);
     const [entries, setEntries] = useState<RegisterEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -23,9 +25,10 @@ export default function AccountRegister() {
     const loadData = () => {
         if (!id) return;
         setLoading(true);
-        Promise.all([getAccount(id), getAccountRegister(id)])
-            .then(([acc, reg]) => {
+        Promise.all([getAccount(id), getAccountRegister(id), getAccounts()])
+            .then(([acc, reg, all]) => {
                 setAccount(acc);
+                setAllAccounts(all);
                 const sorted = (reg || []).sort((a, b) => {
                     if (a.post_date < b.post_date) return -1;
                     if (a.post_date > b.post_date) return 1;
@@ -62,6 +65,7 @@ export default function AccountRegister() {
 
     return (
         <div>
+            <AccountBreadcrumbs currentAccount={account} allAccounts={allAccounts} />
             <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                     <h1 className="page-title">{account.name}</h1>

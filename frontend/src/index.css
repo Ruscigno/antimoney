@@ -332,7 +332,8 @@ a:hover {
 }
 
 .account-tree-row:hover {
-  background: var(--bg-tertiary);
+  background: var(--bg-elevated);
+  box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
 .account-actions {
