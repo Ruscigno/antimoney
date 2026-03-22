@@ -76,11 +76,14 @@ export const createTransaction = (data: CreateTransactionRequest) =>
 export const deleteTransaction = (id: string) =>
     fetchJSON<void>(`/transactions/${id}`, { method: 'DELETE' });
 
-export const updateSplitReconcileState = (splitId: string, state: string) =>
-    fetchJSON<void>(`/transactions/splits/${splitId}/reconcile`, {
-        method: 'PATCH',
-        body: JSON.stringify({ state }),
+export const batchReconcileSplits = (splitGuids: string[]) =>
+    fetchJSON<void>('/transactions/splits/reconcile', {
+        method: 'POST',
+        body: JSON.stringify({ split_guids: splitGuids }),
     });
+
+export const getReconciledBalance = (accountId: string) =>
+    fetchJSON<{ balance: number }>(`/accounts/${accountId}/reconciled-balance`);
 
 // Commodities
 export const getCommodities = () => fetchJSON<Commodity[]>('/commodities');

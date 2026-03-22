@@ -24,7 +24,7 @@ func (h *TransactionHandler) Routes() chi.Router {
 	r.Post("/", h.create)
 	r.Get("/{id}", h.get)
 	r.Delete("/{id}", h.delete)
-	r.Patch("/splits/{splitId}/reconcile", h.updateReconcile)
+	r.Post("/splits/reconcile", h.batchReconcile)
 	return r
 }
 
@@ -90,24 +90,17 @@ func (h *TransactionHandler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
-
-func (h *TransactionHandler) updateReconcile(w http.ResponseWriter, r *http.Request) {
-	splitID := chi.URLParam(r, "splitId")
-
+func (h *TransactionHandler) batchReconcile(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		State string `json:"state"`
+		SplitGUIDs []string `json:"split_guids"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if err := h.svc.UpdateSplitReconcileState(r.Context(), splitID, req.State); err != nil {
-		if errors.Is(err, services.ErrNotFound) {
-			writeError(w, http.StatusNotFound, "split not found")
-			return
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
+	if err := h.svc.BatchReconcileSplits(r.Context(), req.SplitGUIDs); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

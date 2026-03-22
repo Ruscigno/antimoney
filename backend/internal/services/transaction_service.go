@@ -433,27 +433,54 @@ func (s *TransactionService) getTransferAccount(ctx context.Context, txGUID, exc
 	return "-- Split Transaction --", "", nil
 }
 
-// UpdateSplitReconcileState updates the reconcile state of a split.
-// Valid states: 'n' (not reconciled), 'c' (cleared/acknowledged), 'y' (reconciled).
-func (s *TransactionService) UpdateSplitReconcileState(ctx context.Context, splitGUID, state string) error {
+// BatchReconcileSplits sets the reconcile_state to 'y' for a list of split GUIDs.
+// This is used by the reconcile wizard to finalize reconciliation.
+func (s *TransactionService) BatchReconcileSplits(ctx context.Context, splitGUIDs []string) error {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
-	if state != "n" && state != "c" && state != "y" {
-		return fmt.Errorf("invalid reconcile state: %s (must be n, c, or y)", state)
+	if len(splitGUIDs) == 0 {
+		return nil
 	}
 
-	result, err := s.pool.Exec(ctx,
-		`UPDATE splits SET reconcile_state = $1
-		 WHERE guid = $2 AND EXISTS (
-		   SELECT 1 FROM transactions t WHERE t.guid = splits.tx_guid AND t.book_guid = $3
-		 )`, state, splitGUID, bookGUID,
-	)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("update reconcile state: %w", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
+	defer tx.Rollback(ctx)
+
+	for _, splitGUID := range splitGUIDs {
+		result, err := tx.Exec(ctx,
+			`UPDATE splits SET reconcile_state = 'y'
+			 WHERE guid = $1 AND reconcile_state != 'y' AND EXISTS (
+			   SELECT 1 FROM transactions t WHERE t.guid = splits.tx_guid AND t.book_guid = $2
+			 )`, splitGUID, bookGUID,
+		)
+		if err != nil {
+			return fmt.Errorf("update split %s: %w", splitGUID, err)
+		}
+		if result.RowsAffected() == 0 {
+			// Already reconciled or not found — skip silently
+		}
 	}
-	return nil
+
+	return tx.Commit(ctx)
+}
+
+// GetReconciledBalance returns the sum of all reconciled splits for an account.
+func (s *TransactionService) GetReconciledBalance(ctx context.Context, accountGUID string) (float64, error) {
+	bookGUID := auth.BookGUIDFromCtx(ctx)
+
+	var balance float64
+	err := s.pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(s.quantity_num::float / NULLIF(s.quantity_denom, 0)), 0)
+		 FROM splits s
+		 JOIN transactions t ON s.tx_guid = t.guid
+		 WHERE s.account_guid = $1 AND s.reconcile_state = 'y' AND t.book_guid = $2`,
+		accountGUID, bookGUID,
+	).Scan(&balance)
+	if err != nil {
+		return 0, err
+	}
+	return balance, nil
 }
 
 func normalizePostDate(t time.Time) time.Time {

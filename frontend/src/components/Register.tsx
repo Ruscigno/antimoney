@@ -1,17 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import type { RegisterEntry } from '../types';
 import { t, formatCurrency, formatDate } from '../i18n';
-import { updateSplitReconcileState } from '../api/client';
 
 interface RegisterProps {
     entries: RegisterEntry[];
     accountName: string;
-    onReconcileChanged?: () => void;
 }
 
-const RECONCILE_CYCLE: Record<string, string> = { n: 'c', c: 'y', y: 'n' };
-
-export default function Register({ entries, accountName, onReconcileChanged }: RegisterProps) {
+export default function Register({ entries, accountName }: RegisterProps) {
     const navigate = useNavigate();
 
     if (!entries || entries.length === 0) {
@@ -23,18 +19,13 @@ export default function Register({ entries, accountName, onReconcileChanged }: R
         );
     }
 
-    const handleReconcileClick = async (splitGuid: string, currentState: string) => {
-        const nextState = RECONCILE_CYCLE[currentState] || 'n';
-        try {
-            await updateSplitReconcileState(splitGuid, nextState);
-            onReconcileChanged?.();
-        } catch (err) {
-            console.error('Failed to update reconcile state:', err);
+    const reconcileIcon = (state: string) => {
+        switch (state) {
+            case 'y': return '●';
+            case 'c': return '◐';
+            default: return '○';
         }
     };
-
-    const reconcileIcon = (state: string) => t(`register.reconcile.${state}` as any) || '○';
-    const reconcileTooltip = (state: string) => t(`register.reconcile.tooltip.${state}` as any) || '';
     const reconcileColor = (state: string) => {
         switch (state) {
             case 'y': return 'var(--color-income)';
@@ -74,14 +65,9 @@ export default function Register({ entries, accountName, onReconcileChanged }: R
                                             title={t('register.jump')}
                                             onClick={() => navigate(`/accounts/${entry.transfer_account_guid}`)}
                                             style={{
-                                                background: 'none',
-                                                border: 'none',
-                                                cursor: 'pointer',
-                                                padding: '2px 4px',
-                                                fontSize: '0.75rem',
-                                                color: 'var(--text-muted)',
-                                                borderRadius: 4,
-                                                transition: 'color 0.15s, background 0.15s',
+                                                background: 'none', border: 'none', cursor: 'pointer',
+                                                padding: '2px 4px', fontSize: '0.75rem', color: 'var(--text-muted)',
+                                                borderRadius: 4, transition: 'color 0.15s, background 0.15s',
                                             }}
                                             onMouseEnter={e => {
                                                 (e.target as HTMLButtonElement).style.color = 'var(--color-primary)';
@@ -99,26 +85,8 @@ export default function Register({ entries, accountName, onReconcileChanged }: R
                                     <span>{entry.transfer_account}</span>
                                 )}
                             </td>
-                            <td style={{ textAlign: 'center' }}>
-                                <button
-                                    className="btn-reconcile"
-                                    title={reconcileTooltip(entry.reconcile_state)}
-                                    onClick={() => handleReconcileClick(entry.split_guid, entry.reconcile_state)}
-                                    style={{
-                                        background: 'none',
-                                        border: 'none',
-                                        cursor: 'pointer',
-                                        fontSize: '1rem',
-                                        color: reconcileColor(entry.reconcile_state),
-                                        padding: '2px 6px',
-                                        borderRadius: 4,
-                                        transition: 'transform 0.15s',
-                                    }}
-                                    onMouseEnter={e => { (e.target as HTMLButtonElement).style.transform = 'scale(1.3)'; }}
-                                    onMouseLeave={e => { (e.target as HTMLButtonElement).style.transform = 'scale(1)'; }}
-                                >
-                                    {reconcileIcon(entry.reconcile_state)}
-                                </button>
+                            <td style={{ textAlign: 'center', color: reconcileColor(entry.reconcile_state), fontSize: '1rem' }}>
+                                {reconcileIcon(entry.reconcile_state)}
                             </td>
                             <td className="col-deposit">
                                 {entry.deposit != null ? formatCurrency(entry.deposit) : ''}

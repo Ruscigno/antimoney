@@ -26,6 +26,7 @@ func (h *AccountHandler) Routes() chi.Router {
 	r.Put("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
 	r.Get("/{id}/register", h.register)
+	r.Get("/{id}/reconciled-balance", h.reconciledBalance)
 	return r
 }
 
@@ -116,4 +117,14 @@ func (h *AccountHandler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+func (h *AccountHandler) reconciledBalance(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	balance, err := h.txSvc.GetReconciledBalance(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]float64{"balance": balance})
 }
