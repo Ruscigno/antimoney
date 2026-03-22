@@ -32,7 +32,9 @@ func (h *AccountHandler) Routes() chi.Router {
 }
 
 func (h *AccountHandler) list(w http.ResponseWriter, r *http.Request) {
-	accounts, err := h.accountSvc.ListAccountsTree(r.Context())
+	start := r.URL.Query().Get("start")
+	end := r.URL.Query().Get("end")
+	accounts, err := h.accountSvc.ListAccountsTree(r.Context(), start, end)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

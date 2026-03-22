@@ -35,7 +35,7 @@ func TestAccountService(t *testing.T) {
 	svc := NewAccountService(db.Pool)
 
 	// List default accounts (ListAccountsTree)
-	accs, err := svc.ListAccountsTree(ctx)
+	accs, err := svc.ListAccountsTree(ctx, "", "")
 	if err != nil {
 		t.Fatalf("ListAccountsTree failed: %v", err)
 	}

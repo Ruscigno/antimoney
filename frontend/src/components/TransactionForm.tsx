@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Account } from '../types';
 import { handleDateShortcut } from '../utils/date';
 import { createTransaction, updateTransaction, getTransaction } from '../api/client';
@@ -23,6 +24,7 @@ interface SplitInput {
 }
 
 export default function TransactionForm({ onClose, onCreated, defaultAccountGuid, editTxGuid }: TransactionFormProps) {
+    const navigate = useNavigate();
     const [description, setDescription] = useState('');
     const [customId, setCustomId] = useState('');
     const [postDate, setPostDate] = useState(new Date().toISOString().split('T')[0]);
@@ -222,12 +224,42 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
 
                         {splits.map((split, i) => (
                             <div className="split-row" key={i}>
-                                <AccountPicker
-                                    accounts={accounts}
-                                    value={split.account_guid}
-                                    onChange={(guid) => updateSplit(i, 'account_guid', guid)}
-                                    id={`split-account-${i}`}
-                                />
+                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <AccountPicker
+                                            accounts={accounts}
+                                            value={split.account_guid}
+                                            onChange={(guid) => updateSplit(i, 'account_guid', guid)}
+                                            id={`split-account-${i}`}
+                                        />
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            if (split.account_guid) {
+                                                navigate(`/accounts/${split.account_guid}`);
+                                                onClose();
+                                            }
+                                        }}
+                                        disabled={!split.account_guid}
+                                        title={t('register.jump')}
+                                        style={{
+                                            background: 'var(--bg-tertiary)',
+                                            border: '1px solid var(--border-color)',
+                                            borderRadius: 'var(--radius-sm)',
+                                            padding: '0 8px',
+                                            height: '38px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            cursor: split.account_guid ? 'pointer' : 'default',
+                                            color: split.account_guid ? 'var(--text-primary)' : 'var(--text-muted)',
+                                            transition: 'all 0.15s'
+                                        }}
+                                    >
+                                        ↗
+                                    </button>
+                                </div>
                                 <input
                                     type="text"
                                     className="form-input"

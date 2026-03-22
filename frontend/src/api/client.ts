@@ -38,7 +38,13 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 // Accounts
-export const getAccounts = () => fetchJSON<Account[]>('/accounts');
+export const getAccounts = (start?: string, end?: string) => {
+    const query = new URLSearchParams();
+    if (start) query.append('start', start);
+    if (end) query.append('end', end);
+    const qs = query.toString();
+    return fetchJSON<Account[]>(`/accounts${qs ? '?' + qs : ''}`);
+};
 export const getAccount = (id: string) => fetchJSON<Account>(`/accounts/${id}`);
 export const getAccountRegister = (id: string) => fetchJSON<RegisterEntry[]>(`/accounts/${id}/register`);
 

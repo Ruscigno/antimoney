@@ -42,6 +42,11 @@ const translations: Record<Locale, Record<string, string>> = {
         'dashboard.expenseBreakdown': 'Expense Breakdown',
         'dashboard.topAccounts': 'Top Accounts',
         'dashboard.noData': 'No data yet',
+        'dashboard.allTime': 'All Time',
+        'dashboard.thisMonth': 'This Month',
+        'dashboard.lastMonth': 'Last Month',
+        'dashboard.thisYear': 'This Year',
+        'dashboard.lastYear': 'Last Year',
 
         // Accounts
         'accounts.title': 'Chart of Accounts',
@@ -127,6 +132,7 @@ const translations: Record<Locale, Record<string, string>> = {
 
         // Transaction Form
         'form.newTransaction': 'New Transaction',
+        'form.editTransaction': 'Edit Transaction',
         'form.date': 'Date',
         'form.description': 'Description',
         'form.descriptionPlaceholder': 'e.g. Groceries',
@@ -212,6 +218,11 @@ const translations: Record<Locale, Record<string, string>> = {
         'dashboard.expenseBreakdown': 'Despesas por Categoria',
         'dashboard.topAccounts': 'Contas Principais',
         'dashboard.noData': 'Sem dados',
+        'dashboard.allTime': 'Todo o Período',
+        'dashboard.thisMonth': 'Este Mês',
+        'dashboard.lastMonth': 'Mês Passado',
+        'dashboard.thisYear': 'Este Ano',
+        'dashboard.lastYear': 'Ano Passado',
         'accounts.title': 'Plano de Contas',
         'accounts.subtitle': 'Estrutura hierárquica de contas',
         'accounts.noAccounts': 'Nenhuma conta encontrada',
@@ -287,6 +298,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'commodities.createError': 'Falha ao criar moeda (pode já existir)',
         'commodities.confirmDelete': 'Excluir esta moeda? (Apenas se nenhuma conta a usar)',
         'form.newTransaction': 'Nova Transação',
+        'form.editTransaction': 'Editar Transação',
         'form.date': 'Data',
         'form.description': 'Descrição',
         'form.descriptionPlaceholder': 'Ex: Supermercado',

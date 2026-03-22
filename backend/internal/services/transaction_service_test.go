@@ -126,7 +126,7 @@ func TestTransactionService(t *testing.T) {
 	}
 
 	// Check if Imbalance account was created
-	accs, _ := accSvc.ListAccountsTree(ctx)
+	accs, _ := accSvc.ListAccountsTree(ctx, "", "")
 	imbalanceFound := false
 	for _, a := range accs {
 		if a.Name == "Imbalance" {

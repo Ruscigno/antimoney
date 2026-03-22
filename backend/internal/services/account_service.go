@@ -148,22 +148,48 @@ func (s *AccountService) DeleteAccount(ctx context.Context, guid string) error {
 	return nil
 }
 
-// ListAccountsTree returns all accounts for the user's book.
-func (s *AccountService) ListAccountsTree(ctx context.Context) ([]models.Account, error) {
+// ListAccountsTree returns all accounts for the user's book with optional date filters for balances.
+func (s *AccountService) ListAccountsTree(ctx context.Context, start, end string) ([]models.Account, error) {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
+
+	// Convert empty strings to nil for the query
+	var startPtr, endPtr *string
+	if start != "" {
+		startPtr = &start
+	}
+	if end != "" {
+		endPtr = &end
+	}
+
 	rows, err := s.pool.Query(ctx,
 		`SELECT a.guid, a.name, a.account_type,
 		        a.parent_guid, a.placeholder, a.description, a.metadata, a.version,
 		        a.created_at, a.updated_at,
-		        COALESCE(SUM(s.quantity_num::float / NULLIF(s.quantity_denom, 0)), 0) as balance,
-		        COALESCE(SUM(CASE WHEN s.reconcile_state = 'y' THEN s.quantity_num::float / NULLIF(s.quantity_denom, 0) ELSE 0 END), 0) as reconciled_balance,
+		        COALESCE(SUM(
+					CASE 
+						WHEN a.account_type IN ('INCOME', 'EXPENSE') THEN
+							CASE WHEN ($2::timestamp IS NULL OR t.post_date >= $2::timestamp) AND ($3::timestamp IS NULL OR t.post_date <= $3::timestamp) THEN s.quantity_num::float / NULLIF(s.quantity_denom, 0) ELSE 0 END
+						ELSE
+							CASE WHEN ($3::timestamp IS NULL OR t.post_date <= $3::timestamp) THEN s.quantity_num::float / NULLIF(s.quantity_denom, 0) ELSE 0 END
+					END
+				), 0) as balance,
+		        COALESCE(SUM(
+					CASE WHEN s.reconcile_state = 'y' THEN 
+						CASE 
+							WHEN a.account_type IN ('INCOME', 'EXPENSE') THEN
+								CASE WHEN ($2::timestamp IS NULL OR t.post_date >= $2::timestamp) AND ($3::timestamp IS NULL OR t.post_date <= $3::timestamp) THEN s.quantity_num::float / NULLIF(s.quantity_denom, 0) ELSE 0 END
+							ELSE
+								CASE WHEN ($3::timestamp IS NULL OR t.post_date <= $3::timestamp) THEN s.quantity_num::float / NULLIF(s.quantity_denom, 0) ELSE 0 END
+						END
+					ELSE 0 END
+				), 0) as reconciled_balance,
 		        MAX(CASE WHEN s.reconcile_state = 'y' THEN t.post_date ELSE NULL END) as last_reconciled
 		 FROM accounts a
 		 LEFT JOIN splits s ON a.guid = s.account_guid
 		 LEFT JOIN transactions t ON s.tx_guid = t.guid
 		 WHERE a.book_guid = $1
 		 GROUP BY a.guid
-		 ORDER BY a.account_type, a.name`, bookGUID,
+		 ORDER BY a.account_type, a.name`, bookGUID, startPtr, endPtr,
 	)
 	if err != nil {
 		return nil, err

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { getAccounts } from '../api/client';
 import type { Account, AccountType } from '../types';
 import { ACCOUNT_TYPE_COLORS } from '../types';
@@ -15,7 +16,7 @@ interface DashboardData {
     rLiabilities: number;
     rIncome: number;
     rExpenses: number;
-    topAccounts: { name: string; value: number; rValue: number; color: string; type: AccountType }[];
+    topAccounts: { guid: string; name: string; value: number; rValue: number; color: string; type: AccountType }[];
     expenseAccounts: { name: string; value: number; rValue: number; color: string }[];
     incomeAccounts: { name: string; value: number; rValue: number; color: string }[];
 }
@@ -45,7 +46,7 @@ function computeDashboard(accounts: Account[]): DashboardData {
         const rVal = Math.abs(a.reconciled_balance || 0);
         if (val > 0.005 || rVal > 0.005) {
             topAccounts.push({
-                name: a.name, value: val, rValue: rVal,
+                guid: a.guid, name: a.name, value: val, rValue: rVal,
                 color: ACCOUNT_TYPE_COLORS[a.account_type] || '#64748b',
                 type: a.account_type,
             });
@@ -128,7 +129,7 @@ function SegmentDonut({ segments, size = 120, thickness = 14 }: {
 }
 
 /** Horizontal bar chart */
-function HorizBars({ items }: { items: { label: string; value: number; color: string }[] }) {
+function HorizBars({ items }: { items: { label: string; value: number; color: string; guid?: string }[] }) {
     if (items.length === 0) {
         return <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', padding: 20 }}>{t('dashboard.noData')}</div>;
     }
@@ -138,8 +139,14 @@ function HorizBars({ items }: { items: { label: string; value: number; color: st
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {items.map((item, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ minWidth: 110, fontSize: '0.72rem', color: 'var(--text-secondary)', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {item.label.length > 15 ? item.label.slice(0, 14) + '…' : item.label}
+                    <span style={{ flex: '0 0 130px', maxWidth: 130, fontSize: '0.72rem', color: 'var(--text-secondary)', textAlign: 'right', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {item.guid ? (
+                            <Link to={`/accounts/${item.guid}`} style={{ color: 'inherit', textDecoration: 'none' }} title={item.label}>
+                                {item.label}
+                            </Link>
+                        ) : (
+                            item.label
+                        )}
                     </span>
                     <div style={{ flex: 1, height: 18, background: 'var(--bg-tertiary)', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
                         <div style={{
@@ -271,17 +278,50 @@ function MetricCard({ icon, label, value, colorVar, small }: {
 
 /* ──────────────────────────────────────────────── Main ── */
 
+function getDateRange(range: string): { start?: string, end?: string } {
+    const now = new Date();
+    if (range === 'this_month') {
+        return {
+            start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+            // End of month
+            end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString()
+        };
+    }
+    if (range === 'last_month') {
+        return {
+            start: new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString(),
+            end: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999).toISOString()
+        };
+    }
+    if (range === 'this_year') {
+        return {
+            start: new Date(now.getFullYear(), 0, 1).toISOString(),
+            end: new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999).toISOString()
+        };
+    }
+    if (range === 'last_year') {
+        return {
+            start: new Date(now.getFullYear() - 1, 0, 1).toISOString(),
+            end: new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59, 999).toISOString()
+        };
+    }
+    return {};
+}
+
 export default function Dashboard() {
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [loading, setLoading] = useState(true);
     const [showReconciled, setShowReconciled] = useState(false);
+    const [timeRange, setTimeRange] = useState('all');
 
     useEffect(() => {
-        getAccounts()
+        setLoading(true);
+        const { start, end } = getDateRange(timeRange);
+        getAccounts(start, end)
             .then(setAccounts)
             .catch(console.error)
             .finally(() => setLoading(false));
-    }, []);
+    }, [timeRange]);
 
     const data = useMemo(() => computeDashboard(accounts), [accounts]);
 
@@ -307,6 +347,7 @@ export default function Dashboard() {
         label: a.name,
         value: showReconciled ? a.rValue : a.value,
         color: a.color,
+        guid: a.guid,
     }));
 
     return (
@@ -317,7 +358,24 @@ export default function Dashboard() {
                     <h1 className="page-title">{t('dashboard.title')}</h1>
                     <p className="page-subtitle">{t('dashboard.subtitle')}</p>
                 </div>
-                <ToggleGroup value={showReconciled} onChange={setShowReconciled} />
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <select
+                        value={timeRange}
+                        onChange={e => setTimeRange(e.target.value)}
+                        style={{
+                            padding: '6px 12px', borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-color)', background: 'var(--bg-glass)',
+                            color: 'var(--text-primary)', fontSize: '0.8rem', cursor: 'pointer'
+                        }}
+                    >
+                        <option value="all">{t('dashboard.allTime')}</option>
+                        <option value="this_month">{t('dashboard.thisMonth')}</option>
+                        <option value="last_month">{t('dashboard.lastMonth')}</option>
+                        <option value="this_year">{t('dashboard.thisYear')}</option>
+                        <option value="last_year">{t('dashboard.lastYear')}</option>
+                    </select>
+                    <ToggleGroup value={showReconciled} onChange={setShowReconciled} />
+                </div>
             </div>
 
             {/* ── Row 1: Compact metric cards ── */}

@@ -411,6 +411,8 @@ a:hover {
    ============================================ */
 .register-table-wrapper {
   overflow-x: auto;
+  overflow-y: auto;
+  max-height: calc(100vh - 220px);
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
   background: var(--bg-glass);
