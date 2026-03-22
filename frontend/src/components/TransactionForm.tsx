@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Account, Commodity } from '../types';
+import { handleDateShortcut } from '../utils/date';
 import { createTransaction } from '../api/client';
 import { getCommodities, getAccounts } from '../api/client';
 import { t, formatCurrency } from '../i18n';
@@ -168,6 +169,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                 className="form-input"
                                 value={postDate}
                                 onChange={e => setPostDate(e.target.value)}
+                                onKeyDown={e => handleDateShortcut(e, postDate, setPostDate)}
                                 required
                             />
                         </div>

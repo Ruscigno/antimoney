@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import type { RegisterEntry } from '../types';
 import { t, formatCurrency, formatDate } from '../i18n';
 import { getAccountRegister, getReconciledBalance, batchReconcileSplits } from '../api/client';
+import { handleDateShortcut } from '../utils/date';
 
 interface ReconcileWizardProps {
-    accountGuid: string;
+    accountGuids: string[];
     accountName: string;
     onClose: () => void;
     onFinished: () => void;
@@ -12,7 +13,7 @@ interface ReconcileWizardProps {
 
 type Step = 'info' | 'select';
 
-export default function ReconcileWizard({ accountGuid, accountName, onClose, onFinished }: ReconcileWizardProps) {
+export default function ReconcileWizard({ accountGuids, accountName, onClose, onFinished }: ReconcileWizardProps) {
     const [step, setStep] = useState<Step>('info');
     const [statementDate, setStatementDate] = useState(() => new Date().toISOString().slice(0, 10));
     const [endingBalance, setEndingBalance] = useState('');
@@ -22,12 +23,16 @@ export default function ReconcileWizard({ accountGuid, accountName, onClose, onF
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Load reconciled balance on mount
+    // Load reconciled balances on mount
+    const guidsKey = accountGuids.join(',');
     useEffect(() => {
-        getReconciledBalance(accountGuid)
-            .then(data => setStartingBalance(data.balance))
+        Promise.all(accountGuids.map(id => getReconciledBalance(id)))
+            .then(data => {
+                const total = data.reduce((sum, curr) => sum + curr.balance, 0);
+                setStartingBalance(total);
+            })
             .catch(console.error);
-    }, [accountGuid]);
+    }, [guidsKey]);
 
     const handleStartReconcile = async () => {
         if (!endingBalance.trim()) {
@@ -37,12 +42,15 @@ export default function ReconcileWizard({ accountGuid, accountName, onClose, onF
         setError(null);
         setLoading(true);
         try {
-            const reg = await getAccountRegister(accountGuid);
+            const regs = await Promise.all(accountGuids.map(id => getAccountRegister(id)));
+            const allRegs = regs.flat();
             // Only show unreconciled entries up to statement date
             const cutoff = new Date(statementDate + 'T23:59:59Z');
-            const unreconciled = (reg || []).filter(e =>
-                e.reconcile_state !== 'y' && new Date(e.post_date) <= cutoff
+            const unreconciled = allRegs.filter(e =>
+                e && e.reconcile_state !== 'y' && new Date(e.post_date) <= cutoff
             );
+            unreconciled.sort((a, b) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+
             setEntries(unreconciled);
             setStep('select');
         } catch (err) {
@@ -124,6 +132,7 @@ export default function ReconcileWizard({ accountGuid, accountName, onClose, onF
                             className="form-input"
                             value={statementDate}
                             onChange={e => setStatementDate(e.target.value)}
+                            onKeyDown={e => handleDateShortcut(e, statementDate, setStatementDate)}
                         />
 
                         <label className="form-label" style={{ margin: 0, textAlign: 'right' }}>

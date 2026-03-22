@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Accounts from './pages/Accounts';
@@ -39,6 +39,8 @@ function AppContent() {
                     <Route path="/accounts/:id" element={<AccountRegister />} />
                     <Route path="/transactions" element={<Transactions />} />
                     <Route path="/commodities" element={<Commodities />} />
+                    {/* Fallback route — redirect to dashboard for unknown routes (like /login when already logged in) */}
+                    <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
             </main>
         </div>

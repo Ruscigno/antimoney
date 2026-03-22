@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { getAccounts, deleteAccount, reconcileAccountSplits } from '../api/client';
+import { getAccounts, deleteAccount } from '../api/client';
 import AccountTree, { buildTree, collectGuids } from '../components/AccountTree';
 import AccountForm from '../components/AccountForm';
+import ReconcileWizard from '../components/ReconcileWizard';
 import type { Account } from '../types';
 import { t } from '../i18n';
 
@@ -11,6 +12,8 @@ export default function Accounts() {
     const [showForm, setShowForm] = useState(false);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null);
     const [showReconciled, setShowReconciled] = useState(false);
+    const [showReconcile, setShowReconcile] = useState(false);
+    const [reconcileData, setReconcileData] = useState<{ name: string, guids: string[] } | null>(null);
 
     const loadData = () => {
         setLoading(true);
@@ -37,7 +40,7 @@ export default function Accounts() {
         }
     };
 
-    const handleReconcile = async (account: Account) => {
+    const handleReconcile = (account: Account) => {
         // Find the account in the tree to collect descendant GUIDs
         const tree = buildTree(accounts);
         const findInTree = (nodes: Account[]): Account | null => {
@@ -52,20 +55,9 @@ export default function Accounts() {
         };
         const treeNode = findInTree(tree);
         const guids = treeNode ? collectGuids(treeNode) : [account.guid];
-        const hasChildren = guids.length > 1;
-        const msg = hasChildren
-            ? t('accounts.confirmReconcileChildren')
-            : t('accounts.confirmReconcile');
-        if (!window.confirm(msg)) return;
 
-        try {
-            const result = await reconcileAccountSplits(account.guid, guids);
-            if (result.reconciled > 0) {
-                loadData();
-            }
-        } catch (err: any) {
-            alert(err.message || 'Failed to reconcile');
-        }
+        setReconcileData({ name: account.name, guids });
+        setShowReconcile(true);
     };
 
     const handleCloseForm = () => {
@@ -141,6 +133,15 @@ export default function Accounts() {
                     editingAccount={editingAccount}
                     onClose={handleCloseForm}
                     onSaved={loadData}
+                />
+            )}
+
+            {showReconcile && reconcileData && (
+                <ReconcileWizard
+                    accountGuids={reconcileData.guids}
+                    accountName={reconcileData.name}
+                    onClose={() => setShowReconcile(false)}
+                    onFinished={loadData}
                 />
             )}
         </div>

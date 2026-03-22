@@ -77,7 +77,7 @@ export default function AccountRegister() {
 
             {showReconcile && (
                 <ReconcileWizard
-                    accountGuid={account.guid}
+                    accountGuids={[account.guid]}
                     accountName={account.name}
                     onClose={() => setShowReconcile(false)}
                     onFinished={loadData}
