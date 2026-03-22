@@ -103,12 +103,51 @@ resource "google_compute_instance" "db_instance" {
   depends_on = [google_project_service.apis]
 }
 
-# 4. Artifact Registry for our Docker images
+# 4. Artifact Registry for our Docker images with cleanup policies
 resource "google_artifact_registry_repository" "repo" {
   location      = var.region
   repository_id = "antimoney-repo"
   description   = "Docker repository for Antimoney images"
   format        = "DOCKER"
+
+  cleanup_policies {
+    id     = "delete-untagged"
+    action = "DELETE"
+    condition {
+      tag_state = "UNTAGGED"
+    }
+  }
+
+  cleanup_policies {
+    id     = "keep-last-5"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 5
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+# 5. Build Staging Bucket with TTL (Delete build source code after 7 days)
+resource "google_storage_bucket" "build_staging" {
+  name          = "${var.project_id}-build-staging"
+  location      = var.region
+  force_destroy = true
+
+  # Disable soft delete to avoid costs for deleted objects
+  soft_delete_policy {
+    retention_duration_seconds = 0
+  }
+
+  lifecycle_rule {
+    condition {
+      age = 7 # Delete after 7 days
+    }
+    action {
+      type = "Delete"
+    }
+  }
 
   depends_on = [google_project_service.apis]
 }

@@ -29,6 +29,7 @@ cd ../
 # Get the provisioned URLs from Terraform outputs
 BACKEND_URL=$(cd infra && terraform output -raw backend_url)
 FRONTEND_URL=$(cd infra && terraform output -raw frontend_url)
+STAGING_BUCKET=$(cd infra && terraform output -raw build_staging_bucket)
 
 echo "[2/5] Waiting 90s for Database VM startup script to finish installing PostgreSQL..."
 # (A typical ubuntu package install + docker pull takes ~60-80s on an e2-micro)
@@ -50,7 +51,7 @@ fi
 echo "[4/5] Building and Deploying Backend to Cloud Run..."
 cd backend/
 # Build and push to our explicit Artifact Registry repo
-gcloud builds submit --tag $REPO_URL/backend:latest .
+gcloud builds submit --tag $REPO_URL/backend:latest . --gcs-source-staging-dir gs://$STAGING_BUCKET/backend
 
 gcloud run deploy antimoney-backend \
   --image $REPO_URL/backend:latest \
@@ -64,7 +65,7 @@ cd ../frontend/
 mv Dockerfile Dockerfile.dev
 mv Dockerfile.prod Dockerfile
 
-gcloud builds submit --tag $REPO_URL/frontend:latest . || {
+gcloud builds submit --tag $REPO_URL/frontend:latest . --gcs-source-staging-dir gs://$STAGING_BUCKET/frontend || {
   mv Dockerfile Dockerfile.prod
   mv Dockerfile.dev Dockerfile
   exit 1
