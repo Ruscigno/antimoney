@@ -13,6 +13,17 @@ provider "google" {
   zone    = var.zone
 }
 
+resource "random_password" "db_password" {
+  length           = 16
+  special          = true
+  override_special = "_%@"
+}
+
+resource "random_password" "jwt_secret" {
+  length  = 32
+  special = false
+}
+
 # 1. Enable Required APIs (Cloud Run, Compute Engine, Artifact Registry)
 resource "google_project_service" "apis" {
   for_each = toset([
@@ -76,7 +87,7 @@ resource "google_compute_instance" "db_instance" {
       --name postgres \
       --restart always \
       -e POSTGRES_USER=${var.db_user} \
-      -e POSTGRES_PASSWORD=${var.db_password} \
+      -e POSTGRES_PASSWORD=${random_password.db_password.result} \
       -e POSTGRES_DB=${var.db_name} \
       -p 5432:5432 \
       -v /opt/postgres_data:/var/lib/postgresql/data \
@@ -119,7 +130,11 @@ resource "google_cloud_run_v2_service" "backend" {
       }
       env {
         name  = "DATABASE_URL"
-        value = "postgres://${var.db_user}:${var.db_password}@${google_compute_instance.db_instance.network_interface.0.network_ip}:5432/${var.db_name}?sslmode=disable"
+        value = "postgres://${var.db_user}:${random_password.db_password.result}@${google_compute_instance.db_instance.network_interface.0.network_ip}:5432/${var.db_name}?sslmode=disable"
+      }
+      env {
+        name  = "JWT_SECRET"
+        value = random_password.jwt_secret.result
       }
     }
 

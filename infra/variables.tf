@@ -21,12 +21,6 @@ variable "db_user" {
   default     = "antimoney"
 }
 
-variable "db_password" {
-  description = "PostgreSQL Database Password"
-  type        = string
-  sensitive   = true
-}
-
 variable "db_name" {
   description = "PostgreSQL Database Name"
   type        = string

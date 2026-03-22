@@ -49,9 +49,11 @@ fi
 
 echo "[4/5] Building and Deploying Backend to Cloud Run..."
 cd backend/
-# Build and push directly to Cloud Run
+# Build and push to our explicit Artifact Registry repo
+gcloud builds submit --tag $REPO_URL/backend:latest .
+
 gcloud run deploy antimoney-backend \
-  --source . \
+  --image $REPO_URL/backend:latest \
   --project $PROJECT_ID \
   --region $REGION \
   --quiet
@@ -59,8 +61,7 @@ gcloud run deploy antimoney-backend \
 echo "[5/5] Building and Deploying Frontend to Cloud Run..."
 cd ../frontend/
 # Cloud Run automatically uses the Dockerfile.prod since it exists, but let's be explicit
-gcloud builder build \
-  submit --tag $REPO_URL/frontend:latest .
+gcloud builds submit --tag $REPO_URL/frontend:latest -f Dockerfile.prod .
 
 gcloud run deploy antimoney-frontend \
   --image $REPO_URL/frontend:latest \
