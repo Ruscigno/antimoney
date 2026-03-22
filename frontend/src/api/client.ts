@@ -1,0 +1,95 @@
+import type { Account, Commodity, Transaction, RegisterEntry, CreateTransactionRequest } from '../types';
+
+const API_BASE = '/api';
+
+function getToken(): string | null {
+    return localStorage.getItem('antimoney-token');
+}
+
+async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+    const token = getToken();
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(options?.headers as Record<string, string> || {}),
+    };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`${API_BASE}${url}`, {
+        ...options,
+        headers,
+    });
+
+    if (res.status === 401) {
+        // Token expired or invalid — force logout
+        localStorage.removeItem('antimoney-token');
+        window.location.reload();
+        throw new Error('Session expired');
+    }
+
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(body.error || `HTTP ${res.status}`);
+    }
+
+    if (res.status === 204) return undefined as T;
+    return res.json();
+}
+
+// Accounts
+export const getAccounts = () => fetchJSON<Account[]>('/accounts');
+export const getAccount = (id: string) => fetchJSON<Account>(`/accounts/${id}`);
+export const getAccountRegister = (id: string) => fetchJSON<RegisterEntry[]>(`/accounts/${id}/register`);
+
+export const createAccount = (data: {
+    name: string;
+    account_type: string;
+    commodity_guid: string;
+    parent_guid: string | null;
+    placeholder: boolean;
+    description: string;
+}) => fetchJSON<Account>('/accounts', { method: 'POST', body: JSON.stringify(data) });
+
+export const updateAccount = (id: string, data: {
+    name?: string;
+    description?: string;
+    placeholder?: boolean;
+    version: number;
+}) => fetchJSON<Account>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+
+export const deleteAccount = (id: string) =>
+    fetchJSON<void>(`/accounts/${id}`, { method: 'DELETE' });
+
+// Transactions
+export const getTransactions = (limit = 50, offset = 0) =>
+    fetchJSON<Transaction[]>(`/transactions?limit=${limit}&offset=${offset}`);
+
+export const getTransaction = (id: string) => fetchJSON<Transaction>(`/transactions/${id}`);
+
+export const createTransaction = (data: CreateTransactionRequest) =>
+    fetchJSON<Transaction>('/transactions', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+
+export const deleteTransaction = (id: string) =>
+    fetchJSON<void>(`/transactions/${id}`, { method: 'DELETE' });
+
+export const updateSplitReconcileState = (splitId: string, state: string) =>
+    fetchJSON<void>(`/transactions/splits/${splitId}/reconcile`, {
+        method: 'PATCH',
+        body: JSON.stringify({ state }),
+    });
+
+// Commodities
+export const getCommodities = () => fetchJSON<Commodity[]>('/commodities');
+
+export const createCommodity = (data: { namespace: string; mnemonic: string; fullname: string; fraction: number; }) =>
+    fetchJSON<Commodity>('/commodities', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+
+export const deleteCommodity = (id: string) =>
+    fetchJSON<void>(`/commodities/${id}`, { method: 'DELETE' });

@@ -1,0 +1,289 @@
+// Lightweight i18n — English as default, extensible with other locales
+export type Locale = 'en' | 'pt-BR';
+
+const translations: Record<Locale, Record<string, string>> = {
+    'en': {
+        // Sidebar
+        'nav.main': 'Main',
+        'nav.dashboard': 'Dashboard',
+        'nav.accounts': 'Chart of Accounts',
+        'nav.transactions': 'Transactions',
+        'nav.settings': 'Settings',
+        'nav.currencies': 'Currencies',
+
+        // Dashboard
+        'dashboard.title': 'Dashboard',
+        'dashboard.subtitle': 'Financial overview',
+        'dashboard.assets': 'Assets',
+        'dashboard.liabilities': 'Liabilities',
+        'dashboard.income': 'Income',
+        'dashboard.expenses': 'Expenses',
+        'dashboard.netWorth': 'Net Worth',
+        'dashboard.netWorthDesc': 'Assets − Liabilities',
+
+        // Accounts
+        'accounts.title': 'Chart of Accounts',
+        'accounts.subtitle': 'Hierarchical account structure',
+        'accounts.noAccounts': 'No accounts found',
+        'accounts.notFound': 'Account not found',
+        'accounts.newAccount': '+ New Account',
+        'accounts.editAccount': 'Edit Account',
+        'accounts.deleteAccount': 'Delete Account',
+        'accounts.confirmDelete': 'Delete this account? This cannot be undone.',
+        'accounts.name': 'Account Name',
+        'accounts.description': 'Description',
+        'accounts.parentAccount': 'Parent Account',
+        'accounts.topLevel': '(Top level)',
+        'accounts.accountType': 'Account Type',
+        'accounts.placeholder': 'Placeholder (folder only, no transactions)',
+        'accounts.save': 'Save',
+        'accounts.create': 'Create Account',
+        'accounts.cancel': 'Cancel',
+        'accounts.nameRequired': 'Account name is required',
+
+        // Register
+        'register.date': 'Date',
+        'register.num': '#',
+        'register.description': 'Description',
+        'register.transfer': 'Transfer',
+        'register.deposit': 'Deposit',
+        'register.withdrawal': 'Withdrawal',
+        'register.balance': 'Balance',
+        'register.memo': 'Memo',
+        'register.noEntries': 'No transactions recorded in',
+        'register.reconcile': 'R',
+        'register.reconcile.n': '○',
+        'register.reconcile.c': '◐',
+        'register.reconcile.y': '●',
+        'register.reconcile.tooltip.n': 'Not reconciled — click to acknowledge',
+        'register.reconcile.tooltip.c': 'Cleared — click to reconcile',
+        'register.reconcile.tooltip.y': 'Reconciled — click to clear',
+        'register.jump': 'Jump to account',
+
+        // Transactions
+        'transactions.title': 'Transactions',
+        'transactions.subtitle': 'All book transactions',
+        'transactions.noTransactions': 'No transactions found',
+        'transactions.delete': 'Delete',
+        'transactions.confirmDelete': 'Delete this transaction?',
+
+        // Commodities
+        'commodities.title': 'Currencies & Commodities',
+        'commodities.subtitle': 'All registered currencies',
+        'commodities.noCommodities': 'No currencies found',
+        'commodities.namespace': 'Type',
+        'commodities.mnemonic': 'Symbol',
+        'commodities.fullname': 'Name',
+        'commodities.fraction': 'Fraction',
+        'commodities.newCurrency': 'New Currency',
+        'commodities.fullnamePlaceholder': 'e.g. US Dollar, Bitcoin',
+        'commodities.fractionInvalid': 'Fraction must be a positive number',
+        'commodities.mnemonicRequired': 'Symbol (mnemonic) is required',
+        'commodities.createError': 'Failed to create currency (may already exist)',
+        'commodities.confirmDelete': 'Delete this currency forever? (Only works if no accounts use it)',
+
+        // Transaction Form
+        'form.newTransaction': 'New Transaction',
+        'form.date': 'Date',
+        'form.description': 'Description',
+        'form.descriptionPlaceholder': 'e.g. Groceries',
+        'form.splits': 'Splits',
+        'form.splitsHelp': 'Every transaction needs at least two splits: where money comes from (negative) and where it goes (positive). The total must balance to zero.',
+        'form.selectAccount': 'Select account...',
+        'form.value': 'Value',
+        'form.memo': 'Memo',
+        'form.addSplit': '+ Add split',
+        'form.removeSplit': 'Remove split',
+        'form.balance': 'Balance',
+        'form.balanced': '✓ Balanced',
+        'form.unbalanced': '⚠ Unbalanced',
+        'form.invalidAmount': 'Invalid amount in one or more splits',
+        'form.selectAccountError': 'Select an account for each split',
+        'form.noCurrency': 'No currency found',
+        'form.creating': 'Creating...',
+        'form.create': 'Create Transaction',
+        'form.cancel': 'Cancel',
+        'form.createError': 'Error creating transaction',
+
+        // Common
+        'common.loading': 'Loading...',
+        'common.newTransaction': '+ New Transaction',
+        'common.actions': 'Actions',
+
+        // Account types
+        'type.ROOT': 'Root',
+        'type.ASSET': 'Asset',
+        'type.BANK': 'Bank',
+        'type.CASH': 'Cash',
+        'type.LIABILITY': 'Liability',
+        'type.CREDIT': 'Credit Card',
+        'type.INCOME': 'Income',
+        'type.EXPENSE': 'Expense',
+        'type.EQUITY': 'Equity',
+
+        // Shortcuts
+        'shortcuts.title': 'Keyboard Shortcuts',
+        'shortcuts.newTx': 'New transaction',
+        'shortcuts.close': 'Close dialog',
+        'shortcuts.goHome': 'Go to Dashboard',
+        'shortcuts.goAccounts': 'Go to Accounts',
+        'shortcuts.goTransactions': 'Go to Transactions',
+        'shortcuts.showHelp': 'Show shortcuts',
+    },
+    'pt-BR': {
+        'nav.main': 'Principal',
+        'nav.dashboard': 'Dashboard',
+        'nav.accounts': 'Plano de Contas',
+        'nav.transactions': 'Transações',
+        'nav.settings': 'Configurações',
+        'nav.currencies': 'Moedas',
+        'dashboard.title': 'Dashboard',
+        'dashboard.subtitle': 'Visão geral das suas finanças',
+        'dashboard.assets': 'Ativos',
+        'dashboard.liabilities': 'Passivos',
+        'dashboard.income': 'Receitas',
+        'dashboard.expenses': 'Despesas',
+        'dashboard.netWorth': 'Patrimônio Líquido',
+        'dashboard.netWorthDesc': 'Ativos − Passivos',
+        'accounts.title': 'Plano de Contas',
+        'accounts.subtitle': 'Estrutura hierárquica de contas',
+        'accounts.noAccounts': 'Nenhuma conta encontrada',
+        'accounts.notFound': 'Conta não encontrada',
+        'accounts.newAccount': '+ Nova Conta',
+        'accounts.editAccount': 'Editar Conta',
+        'accounts.deleteAccount': 'Excluir Conta',
+        'accounts.confirmDelete': 'Excluir esta conta? Não poderá ser desfeito.',
+        'accounts.name': 'Nome da Conta',
+        'accounts.description': 'Descrição',
+        'accounts.parentAccount': 'Conta Pai',
+        'accounts.topLevel': '(Raiz)',
+        'accounts.accountType': 'Tipo de Conta',
+        'accounts.placeholder': 'Espaço reservado (apenas pasta, sem transações)',
+        'accounts.save': 'Salvar',
+        'accounts.create': 'Criar Conta',
+        'accounts.cancel': 'Cancelar',
+        'accounts.nameRequired': 'Nome da conta é obrigatório',
+        'register.date': 'Data',
+        'register.num': '#',
+        'register.description': 'Descrição',
+        'register.transfer': 'Transferência',
+        'register.deposit': 'Depósito',
+        'register.withdrawal': 'Retirada',
+        'register.balance': 'Saldo',
+        'register.memo': 'Memo',
+        'register.noEntries': 'Nenhuma transação registrada em',
+        'register.reconcile': 'R',
+        'register.reconcile.n': '○',
+        'register.reconcile.c': '◐',
+        'register.reconcile.y': '●',
+        'register.reconcile.tooltip.n': 'Não reconciliado — clique para reconhecer',
+        'register.reconcile.tooltip.c': 'Reconhecido — clique para reconciliar',
+        'register.reconcile.tooltip.y': 'Reconciliado — clique para limpar',
+        'register.jump': 'Ir para conta',
+        'transactions.title': 'Transações',
+        'transactions.subtitle': 'Todas as transações do livro',
+        'transactions.noTransactions': 'Nenhuma transação encontrada',
+        'transactions.delete': 'Excluir',
+        'transactions.confirmDelete': 'Excluir esta transação?',
+        'commodities.title': 'Moedas e Ativos',
+        'commodities.subtitle': 'Todas as moedas registradas',
+        'commodities.noCommodities': 'Nenhuma moeda encontrada',
+        'commodities.namespace': 'Tipo',
+        'commodities.mnemonic': 'Símbolo',
+        'commodities.fullname': 'Nome',
+        'commodities.fraction': 'Fração',
+        'commodities.newCurrency': 'Nova Moeda',
+        'commodities.fullnamePlaceholder': 'Ex: Dólar Americano, Bitcoin',
+        'commodities.fractionInvalid': 'Fração deve ser um número positivo',
+        'commodities.mnemonicRequired': 'Símbolo (mneumônico) é obrigatório',
+        'commodities.createError': 'Falha ao criar moeda (pode já existir)',
+        'commodities.confirmDelete': 'Excluir esta moeda? (Apenas se nenhuma conta a usar)',
+        'form.newTransaction': 'Nova Transação',
+        'form.date': 'Data',
+        'form.description': 'Descrição',
+        'form.descriptionPlaceholder': 'Ex: Supermercado',
+        'form.splits': 'Parcelas (Splits)',
+        'form.splitsHelp': 'Toda transação precisa de pelo menos duas contas (origem [-] e destino [+]). O total deve somar zero.',
+        'form.selectAccount': 'Selecionar conta...',
+        'form.value': 'Valor',
+        'form.memo': 'Memo',
+        'form.addSplit': '+ Adicionar parcela',
+        'form.removeSplit': 'Remover parcela',
+        'form.balance': 'Balanço',
+        'form.balanced': '✓ Equilibrado',
+        'form.unbalanced': '⚠ Desequilibrado',
+        'form.invalidAmount': 'Valor inválido em uma ou mais parcelas',
+        'form.selectAccountError': 'Selecione uma conta para cada parcela',
+        'form.noCurrency': 'Nenhuma moeda encontrada',
+        'form.creating': 'Criando...',
+        'form.create': 'Criar Transação',
+        'form.cancel': 'Cancelar',
+        'form.createError': 'Erro ao criar transação',
+        'common.loading': 'Carregando...',
+        'common.newTransaction': '+ Nova Transação',
+        'common.actions': 'Ações',
+        'type.ROOT': 'Raiz',
+        'type.ASSET': 'Ativo',
+        'type.BANK': 'Banco',
+        'type.CASH': 'Dinheiro',
+        'type.LIABILITY': 'Passivo',
+        'type.CREDIT': 'Cartão de Crédito',
+        'type.INCOME': 'Receita',
+        'type.EXPENSE': 'Despesa',
+        'type.EQUITY': 'Patrimônio',
+        'shortcuts.title': 'Atalhos do Teclado',
+        'shortcuts.newTx': 'Nova transação',
+        'shortcuts.close': 'Fechar diálogo',
+        'shortcuts.goHome': 'Ir para Dashboard',
+        'shortcuts.goAccounts': 'Ir para Contas',
+        'shortcuts.goTransactions': 'Ir para Transações',
+        'shortcuts.showHelp': 'Mostrar atalhos',
+    },
+};
+
+let currentLocale: Locale = 'en';
+
+export function setLocale(locale: Locale) {
+    currentLocale = locale;
+    localStorage.setItem('antimoney-locale', locale);
+}
+
+export function getLocale(): Locale {
+    return currentLocale;
+}
+
+export function initLocale() {
+    const saved = localStorage.getItem('antimoney-locale') as Locale | null;
+    if (saved && translations[saved]) {
+        currentLocale = saved;
+    }
+}
+
+export function t(key: string): string {
+    return translations[currentLocale]?.[key] || translations['en']?.[key] || key;
+}
+
+export function formatCurrency(value: number): string {
+    return new Intl.NumberFormat(currentLocale === 'pt-BR' ? 'pt-BR' : 'en-US', {
+        style: 'currency',
+        currency: 'BRL',
+        minimumFractionDigits: 2,
+    }).format(value);
+}
+
+export function formatDate(dateStr: string): string {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(currentLocale === 'pt-BR' ? 'pt-BR' : 'en-US', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+    });
+}
+
+export function formatDateShort(dateStr: string): string {
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(currentLocale === 'pt-BR' ? 'pt-BR' : 'en-US', {
+        day: '2-digit',
+        month: 'short',
+    });
+}
