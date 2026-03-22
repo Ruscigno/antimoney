@@ -23,6 +23,11 @@ const translations: Record<Locale, Record<string, string>> = {
         'data.importTitle': 'Import Data',
         'data.importDesc': 'Import accounts and transactions from a JSON file. This will REPLACE your current book data.',
         'data.importBtn': 'Import from JSON',
+        'data.importCsvTitle': 'Import Transactions (CSV)',
+        'data.importCsvDesc': 'Import transactions into a specific account. Format: Date, Description, Amount',
+        'data.importCsvBtn': 'Import CSV',
+        'data.selectTargetAccount': '-- Select Target Account --',
+        'data.importCsvSuccess': 'Successfully imported {{count}} transactions!',
 
         // Dashboard
         'dashboard.title': 'Dashboard',
@@ -152,6 +157,8 @@ const translations: Record<Locale, Record<string, string>> = {
         'form.creating': 'Creating...',
         'form.create': 'Create Transaction',
         'form.cancel': 'Cancel',
+        'form.save': 'Save',
+        'form.common.save': 'Save',
         'form.createError': 'Error creating transaction',
 
         // Common
@@ -199,6 +206,11 @@ const translations: Record<Locale, Record<string, string>> = {
         'data.importTitle': 'Importar Dados',
         'data.importDesc': 'Importar contas e transações de um arquivo JSON. Isso irá SUBSTITUIR os dados atuais do seu livro.',
         'data.importBtn': 'Importar de JSON',
+        'data.importCsvTitle': 'Importar Transações (CSV)',
+        'data.importCsvDesc': 'Importar transações para uma conta específica. Formato: Data, Descrição, Valor',
+        'data.importCsvBtn': 'Importar CSV',
+        'data.selectTargetAccount': '-- Selecionar Conta de Destino --',
+        'data.importCsvSuccess': '{{count}} transações importadas com sucesso!',
 
         // Dashboard
         'dashboard.title': 'Dashboard',

@@ -10,7 +10,7 @@ export default function Sidebar({ onLogout, userEmail }: SidebarProps) {
     return (
         <aside className="sidebar">
             <div className="sidebar-logo">
-                <div className="sidebar-logo-icon">₿</div>
+                <img src="/favicon.svg" alt="Antimoney logo" className="sidebar-logo-icon" />
                 Antimoney
             </div>
             <nav className="sidebar-nav">

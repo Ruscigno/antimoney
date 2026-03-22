@@ -32,7 +32,7 @@ export default function LoginPage() {
             <div className="login-card">
                 <div className="login-header">
                     <div className="sidebar-logo" style={{ justifyContent: 'center', marginBottom: 8 }}>
-                        <div className="sidebar-logo-icon">₿</div>
+                        <img src="/favicon.svg" alt="Antimoney logo" className="sidebar-logo-icon" />
                         Antimoney
                     </div>
                     <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>

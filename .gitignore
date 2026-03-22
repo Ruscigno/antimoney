@@ -39,3 +39,13 @@ frontend/test-output*.txt
 
 # Gemini agent
 .gemini/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Large data
+scripts/transactions.csv
+test_filters.js

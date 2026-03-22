@@ -45,7 +45,7 @@ func TestHandlers(t *testing.T) {
 
 	txHandler := handlers.NewTransactionHandler(txSvc)
 	acctHandler := handlers.NewAccountHandler(acctSvc, txSvc)
-	importHandler := handlers.NewImportExportHandler(db.Pool)
+	importHandler := handlers.NewImportExportHandler(db.Pool, txSvc)
 
 	r := chi.NewRouter()
 	r.Use(auth.RequireAuth)

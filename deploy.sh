@@ -60,8 +60,19 @@ gcloud run deploy antimoney-backend \
 
 echo "[5/5] Building and Deploying Frontend to Cloud Run..."
 cd ../frontend/
-# Cloud Run automatically uses the Dockerfile.prod since it exists, but let's be explicit
-gcloud builds submit --tag $REPO_URL/frontend:latest -f Dockerfile.prod .
+# Cloud Build looks for "Dockerfile" by default. We swap them temporarily.
+mv Dockerfile Dockerfile.dev
+mv Dockerfile.prod Dockerfile
+
+gcloud builds submit --tag $REPO_URL/frontend:latest . || {
+  mv Dockerfile Dockerfile.prod
+  mv Dockerfile.dev Dockerfile
+  exit 1
+}
+
+# Restore original Dockerfiles
+mv Dockerfile Dockerfile.prod
+mv Dockerfile.dev Dockerfile
 
 gcloud run deploy antimoney-frontend \
   --image $REPO_URL/frontend:latest \

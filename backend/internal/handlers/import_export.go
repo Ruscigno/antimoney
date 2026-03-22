@@ -10,20 +10,29 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/user/antimoney/internal/auth"
+	"github.com/user/antimoney/internal/seed"
+	"github.com/user/antimoney/internal/services"
+	"encoding/csv"
+	"strconv"
+	"strings"
+	"time"
 )
 
 type ImportExportHandler struct {
 	pool *pgxpool.Pool
+	txSvc *services.TransactionService
 }
 
-func NewImportExportHandler(pool *pgxpool.Pool) *ImportExportHandler {
-	return &ImportExportHandler{pool: pool}
+func NewImportExportHandler(pool *pgxpool.Pool, txSvc *services.TransactionService) *ImportExportHandler {
+	return &ImportExportHandler{pool: pool, txSvc: txSvc}
 }
 
 func (h *ImportExportHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/import", h.handleImport)
+	r.Post("/import/csv", h.handleCSVImport)
 	r.Get("/export", h.handleExport)
+	r.Post("/reset", h.handleFactoryReset)
 	return r
 }
 
@@ -242,6 +251,193 @@ func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"message": "import successful"})
 }
 
+func (h *ImportExportHandler) handleCSVImport(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseMultipartForm(10 << 20)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+
+	accountGUID := r.FormValue("account_guid")
+	if accountGUID == "" {
+		writeError(w, http.StatusBadRequest, "account_guid is required")
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	// Some CSVs might use semicolon
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	records, err := reader.ReadAll()
+	if err != nil {
+		// Try with semicolon if comma failed to produce multiple columns
+		file.Seek(0, 0)
+		reader = csv.NewReader(file)
+		reader.Comma = ';'
+		reader.LazyQuotes = true
+		reader.TrimLeadingSpace = true
+		records, err = reader.ReadAll()
+		if err != nil {
+			log.Printf("Error reading CSV: %v", err)
+			writeError(w, http.StatusBadRequest, "invalid csv format")
+			return
+		}
+	}
+
+	if len(records) < 2 {
+		writeJSON(w, http.StatusOK, map[string]string{"message": "no records to import"})
+		return
+	}
+
+	// Header detection
+	header := records[0]
+	dateIdx, descIdx, amountIdx := -1, -1, -1
+
+	for i, col := range header {
+		colLower := strings.ToLower(col)
+		if dateIdx == -1 && (strings.Contains(colLower, "date")) {
+			dateIdx = i
+		}
+		if descIdx == -1 && (strings.Contains(colLower, "description") || strings.Contains(colLower, "memo") || strings.Contains(colLower, "payee")) {
+			descIdx = i
+		}
+		if amountIdx == -1 && (strings.Contains(colLower, "amount num") || strings.EqualFold(colLower, "amount") || strings.Contains(colLower, "value num") || strings.EqualFold(colLower, "value")) {
+			amountIdx = i
+		}
+	}
+
+	// Fallback if header not recognized
+	if dateIdx == -1 || amountIdx == -1 {
+		dateIdx = 0
+		if len(header) > 1 {
+			descIdx = 1
+		}
+		if len(header) > 2 {
+			amountIdx = 2
+		} else {
+			amountIdx = 1
+		}
+	}
+
+	if descIdx == -1 {
+		descIdx = dateIdx // Use date as description if nothing else
+	}
+
+	count := 0
+	for i := 1; i < len(records); i++ {
+		row := records[i]
+		if len(row) <= max(dateIdx, max(descIdx, amountIdx)) {
+			continue
+		}
+
+		dateStr := row[dateIdx]
+		description := row[descIdx]
+		amountStr := row[amountIdx]
+
+		if dateStr == "" || amountStr == "" {
+			continue
+		}
+
+		// Clean amount string: remove currency symbols, spaces, handle comma/dot
+		amountStr = strings.Map(func(r rune) rune {
+			if (r >= '0' && r <= '9') || r == '-' || r == '.' || r == ',' {
+				return r
+			}
+			return -1
+		}, amountStr)
+
+		// Heuristic for comma as decimal separator vs thousands separator
+		// If there's a comma and a dot, comma is likely thousands
+		// If there's only a comma and it's 2 places from end, it's likely decimal
+		if strings.Contains(row[amountIdx], ",") && strings.Contains(row[amountIdx], ".") {
+			amountStr = strings.Replace(amountStr, ",", "", -1)
+		} else if strings.Contains(amountStr, ",") {
+			// Check if comma is decimal separator (e.g. 1234,56)
+			parts := strings.Split(amountStr, ",")
+			if len(parts) == 2 && len(parts[1]) == 2 {
+				amountStr = parts[0] + "." + parts[1]
+			} else {
+				amountStr = strings.Replace(amountStr, ",", "", -1)
+			}
+		}
+
+		amount, err := strconv.ParseFloat(amountStr, 64)
+		if err != nil {
+			log.Printf("Error parsing amount at row %d (%s): %v", i+1, amountStr, err)
+			continue
+		}
+
+		// Try different date formats
+		var postDate time.Time
+		dateFormats := []string{
+			"2006-01-02",
+			"02/01/2006",
+			"01/02/2006",
+			"2006/01/02",
+			"02-01-2006",
+			"1/2/2006",
+			"2/1/2006",
+			"2006-01-02 15:04:05",
+		}
+		for _, format := range dateFormats {
+			if t, err := time.Parse(format, dateStr); err == nil {
+				postDate = t
+				break
+			}
+		}
+
+		if postDate.IsZero() {
+			log.Printf("Error parsing date at row %d (%s)", i+1, dateStr)
+			continue
+		}
+
+		// Convert amount to GNC numeric (multiplied by 100 for cents)
+		valNum := int64(amount * 100)
+		valDenom := int64(100)
+
+		req := services.CreateTransactionRequest{
+			PostDate:    postDate,
+			Description: description,
+			Splits: []services.CreateSplitRequest{
+				{
+					AccountGUID:   accountGUID,
+					ValueNum:      valNum,
+					ValueDenom:    valDenom,
+					QuantityNum:   valNum,
+					QuantityDenom: valDenom,
+				},
+			},
+		}
+
+		_, err = h.txSvc.CreateTransaction(r.Context(), req)
+		if err != nil {
+			log.Printf("Error creating transaction at row %d: %v", i+1, err)
+			continue
+		}
+		count++
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "csv import successful",
+		"count":   count,
+	})
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (h *ImportExportHandler) handleExport(w http.ResponseWriter, r *http.Request) {
 	bookGUID := auth.BookGUIDFromCtx(r.Context())
 	if bookGUID == "" {
@@ -308,4 +504,61 @@ func (h *ImportExportHandler) handleExport(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", "attachment; filename=\"export.json\"")
 	writeJSON(w, http.StatusOK, data)
+}
+
+func (h *ImportExportHandler) handleFactoryReset(w http.ResponseWriter, r *http.Request) {
+	bookGUID := auth.BookGUIDFromCtx(r.Context())
+	if bookGUID == "" {
+		writeError(w, http.StatusUnauthorized, "missing book guid")
+		return
+	}
+
+	tx, err := h.pool.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	// Unlink book root to avoid FK constraints
+	_, err = tx.Exec(r.Context(), "UPDATE books SET root_account_guid = NULL WHERE guid = $1", bookGUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear book root")
+		return
+	}
+
+	// Delete user splits
+	_, err = tx.Exec(r.Context(), "DELETE FROM splits WHERE tx_guid IN (SELECT guid FROM transactions WHERE book_guid = $1)", bookGUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up splits")
+		return
+	}
+
+	// Delete user transactions
+	_, err = tx.Exec(r.Context(), "DELETE FROM transactions WHERE book_guid = $1", bookGUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up transactions")
+		return
+	}
+
+	// Delete user accounts
+	_, err = tx.Exec(r.Context(), "DELETE FROM accounts WHERE book_guid = $1", bookGUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clean up accounts")
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
+		return
+	}
+
+	// Re-seed the default chart of accounts
+	if err := seed.SeedUserBook(r.Context(), h.pool, bookGUID); err != nil {
+		log.Printf("Failed to re-seed book during factory reset: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to re-seed account")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "account reset successfully"})
 }
