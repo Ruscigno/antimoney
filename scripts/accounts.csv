@@ -1,0 +1,148 @@
+Type,Full Account Name,Account Name,Account Code,Description,Account Color,Notes,Symbol,Namespace,Hidden,Tax Info,Placeholder
+ASSET,Assets,Assets,,Assets,,,CAD,CURRENCY,F,F,T
+ASSET,Assets:Banks,Banks,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:CIBC,CIBC,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:Koho,Koho,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:RBC,RBC,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:Scotiabank,Scotiabank,,,,,CAD,CURRENCY,F,F,T
+ASSET,Assets:Banks:Scotiabank:Temp Account,Temp Account,,,,,CAD,CURRENCY,T,F,F
+BANK,Assets:Banks:Scotiabank:Savings,Savings,,Savings Account,,,CAD,CURRENCY,F,F,T
+BANK,Assets:Banks:Scotiabank:Chequing,Chequing,000180874523,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:Tangerine,Tangerine,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:Tangerine:Savings,Savings,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Banks:Wise,Wise,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Cash,Cash,,"Real cash, pocket",,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Properties,Properties,,,,,CAD,CURRENCY,F,F,T
+ASSET,Assets:Properties:Houses,Houses,,,,,CAD,CURRENCY,F,F,T
+ASSET,Assets:Properties:Houses:710 Evergreen Boulevard,710 Evergreen Boulevard,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Properties:Houses:910 Evergreen Boulevard,910 Evergreen Boulevard,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Properties:Vehicles,Vehicles,,,,,CAD,CURRENCY,F,F,T
+ASSET,Assets:Properties:Vehicles:Equinox 2015,Equinox 2015,,,,,CAD,CURRENCY,F,F,F
+ASSET,Assets:Properties:Vehicles:Kia Sorento 2019,Kia Sorento 2019,,,,,CAD,CURRENCY,F,F,F
+BANK,Assets:Investments,Investments,,Brokerage Account,,,CAD,CURRENCY,F,F,T
+ASSET,Assets:Investments:XM - 62452182,XM - 62452182,,,,,CAD,CURRENCY,F,F,F
+BANK,Assets:Investments:CommonWealthRetirement,CommonWealthRetirement,,,,,CAD,CURRENCY,F,F,F
+BANK,Assets:Investments:Crypto,Crypto,,,,,CAD,CURRENCY,F,F,F
+BANK,Assets:Investments:IB.ca RRSP,IB.ca RRSP,U11107300,,,,CAD,CURRENCY,F,F,F
+BANK,Assets:Investments:IB.ca TFSA,IB.ca TFSA,U11481613,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities,Liabilities,,Liabilities,,,CAD,CURRENCY,F,F,T
+CREDIT,Liabilities:Credit Card,Credit Card,,Credit Card,,,CAD,CURRENCY,F,F,T
+CREDIT,Liabilities:Credit Card:CIBC Dividend Platinum,CIBC Dividend Platinum,,,,,CAD,CURRENCY,F,F,F
+CREDIT,Liabilities:Credit Card:Green Amex,Green Amex,,,,,CAD,CURRENCY,F,F,F
+CREDIT,Liabilities:Credit Card:RBC Avion Visa Infinite,RBC Avion Visa Infinite,,,,,CAD,CURRENCY,F,F,F
+CREDIT,Liabilities:Credit Card:Visa Scotiabank,Visa Scotiabank,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:HI-Loans,HI-Loans,,High Interest Loans,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:HI-Loans:Fairstone,Fairstone,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:HI-Loans:Flexiti,Flexiti,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans,LI-Loans,,Low Interest Loans,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans:Amex money loan,Amex money loan,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans:Fairstone Bestbuy,Fairstone Bestbuy,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans:Home Depot,Home Depot,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans:Kia Sorento 2019,Kia Sorento 2019,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans:RBC-10k Loan,RBC-10k Loan,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:LI-Loans:RBC-20k Loan,RBC-20k Loan,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:Mortgage Loan,Mortgage Loan,,Mortgage Loan,,,CAD,CURRENCY,F,F,T
+LIABILITY,Liabilities:Mortgage Loan:710 Evergreen Boulevard,710 Evergreen Boulevard,,,,,CAD,CURRENCY,F,F,F
+LIABILITY,Liabilities:Mortgage Loan:910 Evergreen Boulevard,910 Evergreen Boulevard,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income,Income,,Income,,,CAD,CURRENCY,F,F,T
+INCOME,Income:Asset appreciation,Asset appreciation,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Brazil,Brazil,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Credit card points,Credit card points,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Dividend Income,Dividend Income,,Dividend Income,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Federal Payments,Federal Payments,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Friends Refund,Friends Refund,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Gifts Received,Gifts Received,,Gifts Received,,,CAD,CURRENCY,F,F,F
+INCOME,Income:GroupSource,GroupSource,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Interest Income,Interest Income,,Interest Income,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Interest Income:Bond Interest,Bond Interest,,Bond Interest,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Interest Income:Checking Interest,Checking Interest,,Checking Interest,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Interest Income:Other Interest,Other Interest,,Other Interest,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Interest Income:Savings Interest,Savings Interest,,Savings Interest,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Other Income,Other Income,,Other Income,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Renting,Renting,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:RRSP,RRSP,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Salary,Salary,,Salary,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Salary (Spouse),Salary (Spouse),,Salary (Spouse),,,CAD,CURRENCY,F,F,F
+INCOME,Income:Saskatchewan,Saskatchewan,,Saskatchewan,,,CAD,CURRENCY,F,F,F
+INCOME,Income:Tax refund,Tax refund,,,,,CAD,CURRENCY,F,F,F
+INCOME,Income:TickerBeatsLLC,TickerBeatsLLC,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses,Expenses,,Expenses,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Auto,Auto,,Auto,,,CAD,CURRENCY,F,F,T
+EXPENSE,Expenses:Auto:Fees,Fees,,Fees,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Auto:Fuel,Fuel,,"Gas, diesel, LPG …",,"Create subaccounts for each used type, if desired.",CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Auto:Parking,Parking,,Parking,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Auto:Repair and Maintenance,Repair and Maintenance,,Repair and Maintenance,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Auto:Sorento 2019,Sorento 2019,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Auto:Tickets,Tickets,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Bank Service Charge,Bank Service Charge,,Bank Service Charge,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Bank Service Charge:Amex,Amex,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Bank Service Charge:CIBC,CIBC,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Bank Service Charge:Koho,Koho,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Bank Service Charge:RBC,RBC,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Bank Service Charge:Scotiabank,Scotiabank,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Brazil,Brazil,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Charity,Charity,,Charity,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:ChildCare,ChildCare,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Depreciation,Depreciation,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Dining,Dining,,Dining,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Education,Education,,Education,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Education:Books,Books,,Books,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Education:English course,English course,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Entertainment,Entertainment,,Entertainment,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Entertainment:Gamming,Gamming,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Entertainment:Music/Movies,Music/Movies,,Music/Movies,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Entertainment:Recreation,Recreation,,Recreation,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Fabiana,Fabiana,,,,,BRL,CURRENCY,F,F,F
+EXPENSE,Expenses:Gifts,Gifts,,Gifts,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Gifts:Donation,Donation,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Groceries,Groceries,,Groceries,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Health & Fitness,Health & Fitness,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Home,Home,,,,,CAD,CURRENCY,F,F,T
+EXPENSE,Expenses:Home:Furnishings,Furnishings,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Home:Home Repair,Home Repair,,Home Repair,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Home:Home Supplies,Home Supplies,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Home:Utilities,Utilities,,Utilities,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Home:Improvement,Improvement,New stuffs,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Immigration,Immigration,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance,Insurance,,Insurance,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance:Auto Insurance,Auto Insurance,,Auto Insurance,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance:Home Insurance,Home Insurance,,Home Insurance,,,CAD,CURRENCY,F,F,T
+EXPENSE,Expenses:Insurance:Home Insurance:710 Evergreen Boulevard,710 Evergreen Boulevard,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance:Home Insurance:910 Evergreen Boulevard,910 Evergreen Boulevard,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance:Home Insurance:Halmark,Halmark,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance:Life Insurance,Life Insurance,,Life Insurance,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Insurance:Mortgage,Mortgage,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Interest,Interest,,Interest,,,CAD,CURRENCY,F,F,T
+EXPENSE,Expenses:Interest:Money Loan Interest,Money Loan Interest,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Interest:Mortgage Interest,Mortgage Interest,,Mortgage Interest,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Interest:Vehicle Loan Interest,Vehicle Loan Interest,,Vehicle Loan Interest,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Investiments,Investiments,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Investiments:Fees,Fees,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Kids allowance,Kids allowance,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Loss,Loss,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Medical Expenses,Medical Expenses,,Medical Expenses,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Miscellaneous,Miscellaneous,,Miscellaneous,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Office supplies,Office supplies,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Online Services,Online Services,,Online Services,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Pilot,Pilot,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Purchases,Purchases,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Shopping,Shopping,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Shopping:Clothing,Clothing,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Shopping:Electronics & Software,Electronics & Software,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Subscriptions,Subscriptions,,Subscriptions,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Taxes,Taxes,,Taxes,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Taxes:Federal,Federal,,Federal,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Taxes:Other Tax,Other Tax,,Other Tax,,,CAD,CURRENCY,F,F,T
+EXPENSE,Expenses:Taxes:Property Tax,Property Tax,,Property Tax,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Taxes:Social Security,Social Security,,Social Security,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Taxes:State/Province,State/Province,,State/Province,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Ticker Beats LLC,Ticker Beats LLC,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Ticker Beats LLC:Canada,Canada,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Transport,Transport,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Travel,Travel,,Travel,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Travel:Back To Brazil 2024,Back To Brazil 2024,,,,,CAD,CURRENCY,F,F,F
+EXPENSE,Expenses:Travel:EAA AirVenture,EAA AirVenture,,,,,CAD,CURRENCY,F,F,F
+EQUITY,Equity,Equity,,Equity,,,CAD,CURRENCY,T,F,T
+EQUITY,Equity:Opening Balances,Opening Balances,,Opening Balances,,,CAD,CURRENCY,F,F,F
+BANK,Imbalance-CAD,Imbalance-CAD,,,,,CAD,CURRENCY,F,F,F
+BANK,Orphan-CAD,Orphan-CAD,,,,,CAD,CURRENCY,T,F,F

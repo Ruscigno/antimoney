@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import type { Account, Commodity } from '../types';
+import type { Account } from '../types';
 import { handleDateShortcut } from '../utils/date';
-import { createTransaction } from '../api/client';
-import { getCommodities, getAccounts } from '../api/client';
+import { createTransaction, updateTransaction, getTransaction } from '../api/client';
+import { getAccounts } from '../api/client';
 import { t, formatCurrency } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
 import AccountPicker from './AccountPicker';
@@ -12,6 +12,8 @@ interface TransactionFormProps {
     onCreated: () => void;
     /** Pre-fill the first split with this account */
     defaultAccountGuid?: string;
+    /** If provided, we are editing this transaction */
+    editTxGuid?: string;
 }
 
 interface SplitInput {
@@ -20,15 +22,15 @@ interface SplitInput {
     memo: string;
 }
 
-export default function TransactionForm({ onClose, onCreated, defaultAccountGuid }: TransactionFormProps) {
+export default function TransactionForm({ onClose, onCreated, defaultAccountGuid, editTxGuid }: TransactionFormProps) {
     const [description, setDescription] = useState('');
+    const [customId, setCustomId] = useState('');
     const [postDate, setPostDate] = useState(new Date().toISOString().split('T')[0]);
     const [splits, setSplits] = useState<SplitInput[]>([
         { account_guid: defaultAccountGuid || '', amount: '', memo: '' },
         { account_guid: '', amount: '', memo: '' },
     ]);
     const [accounts, setAccounts] = useState<Account[]>([]);
-    const [commodities, setCommodities] = useState<Commodity[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const descriptionRef = useRef<HTMLInputElement>(null);
@@ -43,11 +45,25 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
     }, 'Submit form', { ctrl: true });
 
     useEffect(() => {
-        Promise.all([getAccounts(), getCommodities()]).then(([accts, comms]) => {
+        getAccounts().then((accts) => {
             setAccounts(accts.filter(a => !a.placeholder && a.account_type !== 'ROOT'));
-            setCommodities(comms);
         });
-    }, []);
+
+        if (editTxGuid) {
+            setLoading(true);
+            getTransaction(editTxGuid).then((t) => {
+                setDescription(t.description);
+                setCustomId(t.custom_id || '');
+                setPostDate(t.post_date.split('T')[0]);
+                setSplits(t.splits.map(s => ({
+                    account_guid: s.account_guid,
+                    amount: (s.value_num / (s.value_denom || 1)).toString(),
+                    memo: s.memo,
+                })));
+            }).catch(e => setError(e.message))
+                .finally(() => setLoading(false));
+        }
+    }, [editTxGuid]);
 
     // Auto-focus description field
     useEffect(() => {
@@ -92,12 +108,6 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         e.preventDefault();
         setError(null);
 
-        const currency = commodities.find(c => c.mnemonic === 'BRL') || commodities[0];
-        if (!currency) {
-            setError(t('form.noCurrency'));
-            return;
-        }
-
         const validSplits = splits.filter(s => s.account_guid !== '' || s.amount.trim() !== '');
 
         if (validSplits.length < 1) {
@@ -108,14 +118,14 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         const parsedSplits = validSplits.map(s => {
             const amount = parseFloat(s.amount.replace(',', '.'));
             if (isNaN(amount)) return null;
-            const valueNum = Math.round(amount * currency.fraction);
+            const valueNum = Math.round(amount * 100);
             return {
                 account_guid: s.account_guid,
                 memo: s.memo,
                 value_num: valueNum,
-                value_denom: currency.fraction,
+                value_denom: 100,
                 quantity_num: valueNum,
-                quantity_denom: currency.fraction,
+                quantity_denom: 100,
             };
         });
 
@@ -131,12 +141,18 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
 
         setLoading(true);
         try {
-            await createTransaction({
-                currency_guid: currency.guid,
+            const payload = {
+                custom_id: customId,
                 post_date: new Date(postDate + 'T11:00:00Z').toISOString(),
                 description,
                 splits: parsedSplits as NonNullable<(typeof parsedSplits)[0]>[],
-            });
+            };
+
+            if (editTxGuid) {
+                await updateTransaction(editTxGuid, payload);
+            } else {
+                await createTransaction(payload);
+            }
             onCreated();
             onClose();
         } catch (err) {
@@ -156,12 +172,12 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal" onClick={e => e.stopPropagation()}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                    <h2 className="modal-title" style={{ margin: 0 }}>{t('form.newTransaction')}</h2>
+                    <h2 className="modal-title" style={{ margin: 0 }}>{editTxGuid ? t('form.editTransaction') : t('form.newTransaction')}</h2>
                     <kbd className="kbd-hint">Esc</kbd>
                 </div>
 
                 <form onSubmit={handleSubmit}>
-                    <div className="form-row" style={{ gridTemplateColumns: '140px 1fr' }}>
+                    <div className="form-row" style={{ gridTemplateColumns: '140px 100px 1fr' }}>
                         <div className="form-group">
                             <label className="form-label">{t('form.date')}</label>
                             <input
@@ -171,6 +187,16 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                 onChange={e => setPostDate(e.target.value)}
                                 onKeyDown={e => handleDateShortcut(e, postDate, setPostDate)}
                                 required
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label className="form-label">ID / Num</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                placeholder="Optional"
+                                value={customId}
+                                onChange={e => setCustomId(e.target.value)}
                             />
                         </div>
                         <div className="form-group">
@@ -251,7 +277,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                         </span>
                         <button type="button" className="btn btn-secondary" onClick={onClose}>{t('form.cancel')}</button>
                         <button type="submit" className="btn btn-primary" disabled={loading} id="tx-submit">
-                            {loading ? t('form.creating') : t('form.create')}
+                            {loading ? (editTxGuid ? t('common.saving') : t('form.creating')) : (editTxGuid ? t('common.save') : t('form.create'))}
                         </button>
                     </div>
                 </form>

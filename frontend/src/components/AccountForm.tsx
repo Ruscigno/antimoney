@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import type { Account, AccountType } from '../types';
 import { USER_ACCOUNT_TYPES, ACCOUNT_TYPE_COLORS } from '../types';
 import { t } from '../i18n';
-import { createAccount, updateAccount, getCommodities } from '../api/client';
+import { createAccount, updateAccount } from '../api/client';
 
 interface AccountFormProps {
     accounts: Account[];
@@ -69,7 +69,6 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
     const [placeholder, setPlaceholder] = useState(editingAccount?.placeholder || false);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
-    const [commodityGuid, setCommodityGuid] = useState('');
 
     // ESC key to close
     useEffect(() => {
@@ -80,14 +79,7 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
         return () => document.removeEventListener('keydown', handleKey);
     }, [onClose]);
 
-    useEffect(() => {
-        getCommodities().then(commodities => {
-            const brl = commodities.find(c => c.mnemonic === 'BRL') || commodities[0];
-            if (brl) setCommodityGuid(brl.guid);
-        });
-    }, []);
-
-    // Find the root account guid for "top level" option
+    // ESC key to close
     const rootAccount = accounts.find(a => a.account_type === 'ROOT');
     const tree = buildTree(accounts);
     const flatList = flattenAccounts(tree);
@@ -119,7 +111,6 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
                 await createAccount({
                     name: name.trim(),
                     account_type: accountType,
-                    commodity_guid: commodityGuid,
                     parent_guid: parent,
                     placeholder,
                     description: description.trim(),

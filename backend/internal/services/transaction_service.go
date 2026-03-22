@@ -33,10 +33,10 @@ func NewTransactionService(pool *pgxpool.Pool) *TransactionService {
 
 // CreateTransactionRequest is the payload for creating a new transaction.
 type CreateTransactionRequest struct {
-	CurrencyGUID string               `json:"currency_guid"`
-	PostDate     time.Time            `json:"post_date"`
-	Description  string               `json:"description"`
-	Splits       []CreateSplitRequest `json:"splits"`
+	CustomID    string               `json:"custom_id"`
+	PostDate    time.Time            `json:"post_date"`
+	Description string               `json:"description"`
+	Splits      []CreateSplitRequest `json:"splits"`
 }
 
 type CreateSplitRequest struct {
@@ -79,8 +79,8 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	if !sum.IsZero() {
 		var imbalanceAcctGUID string
 		err := tx.QueryRow(ctx,
-			"SELECT guid FROM accounts WHERE book_guid = $1 AND name = 'Imbalance' AND commodity_guid = $2 LIMIT 1",
-			bookGUID, req.CurrencyGUID,
+			"SELECT guid FROM accounts WHERE book_guid = $1 AND name = 'Imbalance' LIMIT 1",
+			bookGUID,
 		).Scan(&imbalanceAcctGUID)
 
 		if err != nil {
@@ -93,9 +93,9 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 				imbalanceAcctGUID = uuid.New().String()
 				now := time.Now().UTC()
 				_, errIns := tx.Exec(ctx,
-					`INSERT INTO accounts (guid, name, account_type, commodity_guid, commodity_scu, parent_guid, book_guid, placeholder, description, metadata, version, created_at, updated_at)
-					 VALUES ($1, 'Imbalance', 'EQUITY', $2, 100, $3, $4, false, 'Automatically created imbalance account', '{}', 1, $5, $5)`,
-					imbalanceAcctGUID, req.CurrencyGUID, rootAcctGUID, bookGUID, now,
+					`INSERT INTO accounts (guid, name, account_type, parent_guid, book_guid, placeholder, description, metadata, version, created_at, updated_at)
+					 VALUES ($1, 'Imbalance', 'EQUITY', $2, $3, false, 'Automatically created imbalance account', '{}', 1, $4, $4)`,
+					imbalanceAcctGUID, rootAcctGUID, bookGUID, now,
 				)
 				if errIns != nil {
 					return nil, fmt.Errorf("create imbalance account: %w", errIns)
@@ -143,10 +143,10 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	now := time.Now().UTC()
 
 	err = tx.QueryRow(ctx,
-		`INSERT INTO transactions (guid, currency_guid, book_guid, post_date, enter_date, description, metadata, version, created_at, updated_at)
+		`INSERT INTO transactions (guid, custom_id, book_guid, post_date, enter_date, description, metadata, version, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)
 		 RETURNING guid`,
-		txGUID, req.CurrencyGUID, bookGUID, postDate, now, req.Description, json.RawMessage("{}"), now,
+		txGUID, req.CustomID, bookGUID, postDate, now, req.Description, json.RawMessage("{}"), now,
 	).Scan(&txGUID)
 	if err != nil {
 		return nil, fmt.Errorf("insert transaction: %w", err)
@@ -183,17 +183,147 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 
 	bk := bookGUID
 	return &models.Transaction{
-		GUID:         txGUID,
-		CurrencyGUID: req.CurrencyGUID,
-		BookGUID:     &bk,
-		PostDate:     postDate,
-		EnterDate:    now,
-		Description:  req.Description,
-		Metadata:     json.RawMessage("{}"),
-		Version:      1,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		Splits:       resultSplits,
+		GUID:        txGUID,
+		CustomID:    req.CustomID,
+		BookGUID:    &bk,
+		PostDate:    postDate,
+		EnterDate:   now,
+		Description: req.Description,
+		Metadata:    json.RawMessage("{}"),
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Splits:      resultSplits,
+	}, nil
+}
+
+// UpdateTransactionRequest is the payload for updating an existing transaction.
+type UpdateTransactionRequest struct {
+	CustomID    string               `json:"custom_id"`
+	PostDate    time.Time            `json:"post_date"`
+	Description string               `json:"description"`
+	Splits      []CreateSplitRequest `json:"splits"`
+}
+
+// UpdateTransaction updates an existing transaction and replaces its splits.
+// It also resets the reconcile state of all new splits to 'n', effectively unreconciling the transaction.
+func (s *TransactionService) UpdateTransaction(ctx context.Context, txGUID string, req UpdateTransactionRequest) (*models.Transaction, error) {
+	bookGUID := auth.BookGUIDFromCtx(ctx)
+
+	// 1. Verify transaction exists and belongs to the user
+	var existingVersion int
+	err := s.pool.QueryRow(ctx, "SELECT version FROM transactions WHERE guid = $1 AND book_guid = $2", txGUID, bookGUID).Scan(&existingVersion)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("lookup transaction: %w", err)
+	}
+
+	// 2. Validate splits
+	validSplits := make([]CreateSplitRequest, 0, len(req.Splits))
+	var values []gnc.Numeric
+	for _, sp := range req.Splits {
+		if sp.ValueNum != 0 {
+			validSplits = append(validSplits, sp)
+			values = append(values, gnc.New(sp.ValueNum, sp.ValueDenom))
+		}
+	}
+	req.Splits = validSplits
+
+	sum := gnc.Sum(values)
+	if !sum.IsZero() {
+		return nil, ErrUnbalancedTransaction
+	}
+
+	if len(req.Splits) < 2 {
+		return nil, fmt.Errorf("a transaction must have at least 2 splits")
+	}
+
+	postDate := normalizePostDate(req.PostDate)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// 3. Verify no splits target placeholder accounts
+	for _, sp := range req.Splits {
+		var placeholder bool
+		err := tx.QueryRow(ctx,
+			"SELECT placeholder FROM accounts WHERE guid = $1 AND book_guid = $2",
+			sp.AccountGUID, bookGUID,
+		).Scan(&placeholder)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("account %s not found or access denied", sp.AccountGUID)
+			}
+			return nil, fmt.Errorf("lookup account %s: %w", sp.AccountGUID, err)
+		}
+		if placeholder {
+			return nil, ErrPlaceholderAccount
+		}
+	}
+
+	now := time.Now().UTC()
+
+	// 4. Update transaction
+	_, err = tx.Exec(ctx,
+		`UPDATE transactions SET custom_id = $1, post_date = $2, description = $3, version = version + 1, updated_at = $4
+		 WHERE guid = $5 AND book_guid = $6`,
+		req.CustomID, postDate, req.Description, now, txGUID, bookGUID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update transaction: %w", err)
+	}
+
+	// 5. Delete old splits
+	_, err = tx.Exec(ctx, "DELETE FROM splits WHERE tx_guid = $1", txGUID)
+	if err != nil {
+		return nil, fmt.Errorf("delete old splits: %w", err)
+	}
+
+	// 6. Insert new splits (always unreconciled 'n')
+	resultSplits := make([]models.Split, len(req.Splits))
+	for i, sp := range req.Splits {
+		splitGUID := uuid.New().String()
+		_, err := tx.Exec(ctx,
+			`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom, quantity_num, quantity_denom, reconcile_state, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'n', $9)`,
+			splitGUID, txGUID, sp.AccountGUID, sp.Memo,
+			sp.ValueNum, sp.ValueDenom, sp.QuantityNum, sp.QuantityDenom, now,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("insert split %d: %w", i, err)
+		}
+		resultSplits[i] = models.Split{
+			GUID:           splitGUID,
+			TxGUID:         txGUID,
+			AccountGUID:    sp.AccountGUID,
+			Memo:           sp.Memo,
+			ValueNum:       sp.ValueNum,
+			ValueDenom:     sp.ValueDenom,
+			QuantityNum:    sp.QuantityNum,
+			QuantityDenom:  sp.QuantityDenom,
+			ReconcileState: "n",
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit transaction update: %w", err)
+	}
+
+	bk := bookGUID
+	return &models.Transaction{
+		GUID:        txGUID,
+		CustomID:    req.CustomID,
+		BookGUID:    &bk,
+		PostDate:    postDate,
+		Description: req.Description,
+		Version:     existingVersion + 1,
+		UpdatedAt:   now,
+		Splits:      resultSplits,
 	}, nil
 }
 
@@ -202,9 +332,9 @@ func (s *TransactionService) GetTransaction(ctx context.Context, guid string) (*
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 	txn := &models.Transaction{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT guid, currency_guid, post_date, enter_date, description, metadata, version, created_at, updated_at
+		`SELECT guid, custom_id, post_date, enter_date, description, metadata, version, created_at, updated_at
 		 FROM transactions WHERE guid = $1 AND book_guid = $2`, guid, bookGUID,
-	).Scan(&txn.GUID, &txn.CurrencyGUID, &txn.PostDate, &txn.EnterDate,
+	).Scan(&txn.GUID, &txn.CustomID, &txn.PostDate, &txn.EnterDate,
 		&txn.Description, &txn.Metadata, &txn.Version, &txn.CreatedAt, &txn.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -247,9 +377,9 @@ func (s *TransactionService) ListTransactions(ctx context.Context, limit, offset
 	}
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT guid, currency_guid, post_date, enter_date, description, metadata, version, created_at, updated_at
+		`SELECT guid, custom_id, post_date, enter_date, description, metadata, version, created_at, updated_at
 		 FROM transactions WHERE book_guid = $3
-		 ORDER BY post_date DESC LIMIT $1 OFFSET $2`, limit, offset, bookGUID,
+		 ORDER BY post_date DESC, custom_id DESC LIMIT $1 OFFSET $2`, limit, offset, bookGUID,
 	)
 	if err != nil {
 		return nil, err
@@ -259,7 +389,7 @@ func (s *TransactionService) ListTransactions(ctx context.Context, limit, offset
 	var txns []models.Transaction
 	for rows.Next() {
 		var txn models.Transaction
-		if err := rows.Scan(&txn.GUID, &txn.CurrencyGUID, &txn.PostDate, &txn.EnterDate,
+		if err := rows.Scan(&txn.GUID, &txn.CustomID, &txn.PostDate, &txn.EnterDate,
 			&txn.Description, &txn.Metadata, &txn.Version, &txn.CreatedAt, &txn.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -328,12 +458,12 @@ func (s *TransactionService) GetAccountRegister(ctx context.Context, accountGUID
 	}
 
 	rows, err := s.pool.Query(ctx,
-		`SELECT t.guid, t.post_date, t.description,
+		`SELECT t.guid, t.custom_id, t.post_date, t.description,
 		        s.guid, s.value_num, s.value_denom, s.quantity_num, s.quantity_denom, s.memo, s.reconcile_state
 		 FROM splits s
 		 JOIN transactions t ON s.tx_guid = t.guid
 		 WHERE s.account_guid = $1
-		 ORDER BY t.post_date ASC, t.enter_date ASC`, accountGUID,
+		 ORDER BY t.post_date ASC, t.custom_id ASC, t.enter_date ASC`, accountGUID,
 	)
 	if err != nil {
 		return nil, err
@@ -346,6 +476,7 @@ func (s *TransactionService) GetAccountRegister(ctx context.Context, accountGUID
 	for rows.Next() {
 		var (
 			txGUID         string
+			customID       string
 			postDate       time.Time
 			description    string
 			splitGUID      string
@@ -356,7 +487,7 @@ func (s *TransactionService) GetAccountRegister(ctx context.Context, accountGUID
 			memo           string
 			reconcileState string
 		)
-		if err := rows.Scan(&txGUID, &postDate, &description,
+		if err := rows.Scan(&txGUID, &customID, &postDate, &description,
 			&splitGUID, &valueNum, &valueDenom, &qtyNum, &qtyDenom, &memo, &reconcileState); err != nil {
 			return nil, err
 		}
@@ -366,6 +497,7 @@ func (s *TransactionService) GetAccountRegister(ctx context.Context, accountGUID
 
 		entry := models.RegisterEntry{
 			TransactionGUID: txGUID,
+			CustomID:        customID,
 			PostDate:        postDate,
 			Description:     description,
 			Balance:         runningBalance.ToFloat64(),

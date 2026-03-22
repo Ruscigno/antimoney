@@ -80,6 +80,12 @@ export function useGlobalShortcuts() {
                 description: 'Go to Transactions',
                 scope: 'global',
             }),
+            registerShortcut({
+                key: '4', alt: true,
+                action: () => navigate('/data'),
+                description: 'Go to Data Management',
+                scope: 'global',
+            }),
         ];
 
         return () => {

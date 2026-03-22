@@ -14,6 +14,7 @@ export default function AccountRegister() {
     const [entries, setEntries] = useState<RegisterEntry[]>([]);
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
+    const [editTxGuid, setEditTxGuid] = useState<string | null>(null);
     const [showReconcile, setShowReconcile] = useState(false);
 
     // N shortcut opens new transaction form
@@ -25,7 +26,7 @@ export default function AccountRegister() {
         Promise.all([getAccount(id), getAccountRegister(id)])
             .then(([acc, reg]) => {
                 setAccount(acc);
-                setEntries(reg || []);
+                setEntries((reg || []).reverse());
             })
             .catch(console.error)
             .finally(() => setLoading(false));
@@ -65,13 +66,14 @@ export default function AccountRegister() {
                 </div>
             </div>
 
-            <Register entries={entries} accountName={account.name} onReconcileChanged={loadData} />
+            <Register entries={entries} accountName={account.name} onReconcileChanged={loadData} onEditTransaction={setEditTxGuid} />
 
-            {showForm && (
+            {(showForm || editTxGuid) && (
                 <TransactionForm
-                    onClose={() => setShowForm(false)}
+                    onClose={() => { setShowForm(false); setEditTxGuid(null); }}
                     onCreated={loadData}
                     defaultAccountGuid={account.guid}
+                    editTxGuid={editTxGuid || undefined}
                 />
             )}
 

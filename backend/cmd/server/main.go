@@ -56,13 +56,12 @@ func main() {
 	// Create services
 	txSvc := services.NewTransactionService(pool)
 	acctSvc := services.NewAccountService(pool)
-	commoditySvc := services.NewCommodityService(pool)
 	userSvc := auth.NewUserService(pool)
 
 	// Create handlers
 	txHandler := handlers.NewTransactionHandler(txSvc)
 	acctHandler := handlers.NewAccountHandler(acctSvc, txSvc)
-	commodityHandler := handlers.NewCommodityHandler(commoditySvc)
+	importExportHandler := handlers.NewImportExportHandler(pool)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -75,7 +74,7 @@ func main() {
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
@@ -113,11 +112,6 @@ func main() {
 				}
 				handlers.WriteErrorPublic(w, http.StatusInternalServerError, err.Error())
 				return
-			}
-
-			// Seed default chart of accounts for the new user's book
-			if err := seed.SeedUserBook(r.Context(), pool, resp.BookGUID); err != nil {
-				log.Printf("Warning: seed user book: %v", err)
 			}
 
 			handlers.WriteJSONPublic(w, http.StatusCreated, resp)
@@ -164,7 +158,7 @@ func main() {
 
 		r.Mount("/transactions", txHandler.Routes())
 		r.Mount("/accounts", acctHandler.Routes())
-		r.Mount("/commodities", commodityHandler.Routes())
+		r.Mount("/data", importExportHandler.Routes())
 
 		// Books endpoint (user's book)
 		r.Get("/books", func(w http.ResponseWriter, r *http.Request) {

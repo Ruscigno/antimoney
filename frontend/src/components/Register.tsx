@@ -7,9 +7,10 @@ interface RegisterProps {
     entries: RegisterEntry[];
     accountName: string;
     onReconcileChanged?: () => void;
+    onEditTransaction?: (guid: string) => void;
 }
 
-export default function Register({ entries, accountName, onReconcileChanged }: RegisterProps) {
+export default function Register({ entries, accountName, onReconcileChanged, onEditTransaction }: RegisterProps) {
     const navigate = useNavigate();
 
     if (!entries || entries.length === 0) {
@@ -56,6 +57,18 @@ export default function Register({ entries, accountName, onReconcileChanged }: R
         }
     };
 
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    const getRowClass = (postDateStr: string, isHoverable: boolean) => {
+        const d = postDateStr.split('T')[0];
+        let timeClass = '';
+        if (d < todayStr) timeClass = 'row-past';
+        else if (d === todayStr) timeClass = 'row-today';
+        else timeClass = 'row-future';
+
+        return [isHoverable ? 'hoverable-row' : '', timeClass].filter(Boolean).join(' ');
+    };
+
     return (
         <div className="register-table-wrapper">
             <table className="register-table">
@@ -74,8 +87,13 @@ export default function Register({ entries, accountName, onReconcileChanged }: R
                 </thead>
                 <tbody>
                     {entries.map((entry, i) => (
-                        <tr key={`${entry.transaction_guid}-${i}`}>
-                            <td className="col-num">{i + 1}</td>
+                        <tr
+                            key={`${entry.transaction_guid}-${i}`}
+                            onClick={() => onEditTransaction?.(entry.transaction_guid)}
+                            style={{ cursor: onEditTransaction ? 'pointer' : 'default' }}
+                            className={getRowClass(entry.post_date, !!onEditTransaction)}
+                        >
+                            <td className="col-num">{entry.custom_id || i + 1}</td>
                             <td className="col-date">{formatDate(entry.post_date)}</td>
                             <td className="col-description">{entry.description}</td>
                             <td className="col-transfer">
@@ -107,7 +125,7 @@ export default function Register({ entries, accountName, onReconcileChanged }: R
                                     <span>{entry.transfer_account}</span>
                                 )}
                             </td>
-                            <td style={{ textAlign: 'center' }}>
+                            <td style={{ textAlign: 'center' }} onClick={e => e.stopPropagation()}>
                                 <button
                                     onClick={() => handleReconcileClick(entry.split_guid, entry.reconcile_state)}
                                     title={reconcileTooltip(entry.reconcile_state)}

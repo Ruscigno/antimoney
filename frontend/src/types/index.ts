@@ -1,10 +1,3 @@
-export interface Commodity {
-    guid: string;
-    namespace: string;
-    mnemonic: string;
-    fullname: string;
-    fraction: number;
-}
 
 export type AccountType =
     | 'ROOT' | 'ASSET' | 'BANK' | 'CASH'
@@ -20,8 +13,6 @@ export interface Account {
     guid: string;
     name: string;
     account_type: AccountType;
-    commodity_guid: string;
-    commodity_scu: number;
     parent_guid: string | null;
     placeholder: boolean;
     description: string;
@@ -48,7 +39,7 @@ export interface Split {
 
 export interface Transaction {
     guid: string;
-    currency_guid: string;
+    custom_id: string;
     post_date: string;
     enter_date: string;
     description: string;
@@ -59,6 +50,7 @@ export interface Transaction {
 
 export interface RegisterEntry {
     transaction_guid: string;
+    custom_id: string;
     post_date: string;
     description: string;
     transfer_account: string;
@@ -72,7 +64,7 @@ export interface RegisterEntry {
 }
 
 export interface CreateTransactionRequest {
-    currency_guid: string;
+    custom_id: string;
     post_date: string;
     description: string;
     splits: {

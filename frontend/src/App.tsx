@@ -4,7 +4,7 @@ import Dashboard from './pages/Dashboard';
 import Accounts from './pages/Accounts';
 import AccountRegister from './pages/AccountRegister';
 import Transactions from './pages/Transactions';
-import Commodities from './pages/Commodities';
+import DataManagement from './pages/DataManagement';
 import LoginPage from './pages/LoginPage';
 import { useGlobalShortcuts } from './hooks/useShortcuts';
 import { initLocale } from './i18n';
@@ -38,7 +38,7 @@ function AppContent() {
                     <Route path="/accounts" element={<Accounts />} />
                     <Route path="/accounts/:id" element={<AccountRegister />} />
                     <Route path="/transactions" element={<Transactions />} />
-                    <Route path="/commodities" element={<Commodities />} />
+                    <Route path="/data" element={<DataManagement />} />
                     {/* Fallback route — redirect to dashboard for unknown routes (like /login when already logged in) */}
                     <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

@@ -1,0 +1,1 @@
+ALTER TABLE transactions ADD COLUMN custom_id VARCHAR(50) NOT NULL DEFAULT '';

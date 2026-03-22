@@ -24,13 +24,11 @@ func NewAccountService(pool *pgxpool.Pool) *AccountService {
 }
 
 type CreateAccountRequest struct {
-	Name          string             `json:"name"`
-	AccountType   models.AccountType `json:"account_type"`
-	CommodityGUID string             `json:"commodity_guid"`
-	CommoditySCU  int                `json:"commodity_scu"`
-	ParentGUID    *string            `json:"parent_guid"`
-	Placeholder   bool               `json:"placeholder"`
-	Description   string             `json:"description"`
+	Name        string             `json:"name"`
+	AccountType models.AccountType `json:"account_type"`
+	ParentGUID  *string            `json:"parent_guid"`
+	Placeholder bool               `json:"placeholder"`
+	Description string             `json:"description"`
 }
 
 type UpdateAccountRequest struct {
@@ -46,31 +44,24 @@ func (s *AccountService) CreateAccount(ctx context.Context, req CreateAccountReq
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 	guid := uuid.New().String()
 	now := time.Now().UTC()
-	scu := req.CommoditySCU
-	if scu == 0 {
-		scu = 100
-	}
-
 	account := &models.Account{
-		GUID:          guid,
-		Name:          req.Name,
-		AccountType:   req.AccountType,
-		CommodityGUID: req.CommodityGUID,
-		CommoditySCU:  scu,
-		ParentGUID:    req.ParentGUID,
-		BookGUID:      &bookGUID,
-		Placeholder:   req.Placeholder,
-		Description:   req.Description,
-		Metadata:      json.RawMessage("{}"),
-		Version:       1,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		GUID:        guid,
+		Name:        req.Name,
+		AccountType: req.AccountType,
+		ParentGUID:  req.ParentGUID,
+		BookGUID:    &bookGUID,
+		Placeholder: req.Placeholder,
+		Description: req.Description,
+		Metadata:    json.RawMessage("{}"),
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO accounts (guid, name, account_type, commodity_guid, commodity_scu, parent_guid, book_guid, placeholder, description, metadata, version, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-		account.GUID, account.Name, account.AccountType, account.CommodityGUID, account.CommoditySCU,
+		`INSERT INTO accounts (guid, name, account_type, parent_guid, book_guid, placeholder, description, metadata, version, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		account.GUID, account.Name, account.AccountType,
 		account.ParentGUID, account.BookGUID, account.Placeholder, account.Description, account.Metadata,
 		account.Version, account.CreatedAt, account.UpdatedAt,
 	)
@@ -85,10 +76,10 @@ func (s *AccountService) GetAccount(ctx context.Context, guid string) (*models.A
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 	acc := &models.Account{}
 	err := s.pool.QueryRow(ctx,
-		`SELECT guid, name, account_type, commodity_guid, commodity_scu, parent_guid,
+		`SELECT guid, name, account_type, parent_guid,
 		        placeholder, description, metadata, version, created_at, updated_at
 		 FROM accounts WHERE guid = $1 AND book_guid = $2`, guid, bookGUID,
-	).Scan(&acc.GUID, &acc.Name, &acc.AccountType, &acc.CommodityGUID, &acc.CommoditySCU,
+	).Scan(&acc.GUID, &acc.Name, &acc.AccountType,
 		&acc.ParentGUID, &acc.Placeholder, &acc.Description, &acc.Metadata,
 		&acc.Version, &acc.CreatedAt, &acc.UpdatedAt)
 	if err != nil {
@@ -161,7 +152,7 @@ func (s *AccountService) DeleteAccount(ctx context.Context, guid string) error {
 func (s *AccountService) ListAccountsTree(ctx context.Context) ([]models.Account, error) {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 	rows, err := s.pool.Query(ctx,
-		`SELECT a.guid, a.name, a.account_type, a.commodity_guid, a.commodity_scu,
+		`SELECT a.guid, a.name, a.account_type,
 		        a.parent_guid, a.placeholder, a.description, a.metadata, a.version,
 		        a.created_at, a.updated_at,
 		        COALESCE(SUM(s.quantity_num::float / NULLIF(s.quantity_denom, 0)), 0) as balance,
@@ -179,11 +170,11 @@ func (s *AccountService) ListAccountsTree(ctx context.Context) ([]models.Account
 	}
 	defer rows.Close()
 
-	var accounts []models.Account
+	accounts := make([]models.Account, 0)
 	for rows.Next() {
 		var acc models.Account
-		if err := rows.Scan(&acc.GUID, &acc.Name, &acc.AccountType, &acc.CommodityGUID,
-			&acc.CommoditySCU, &acc.ParentGUID, &acc.Placeholder, &acc.Description,
+		if err := rows.Scan(&acc.GUID, &acc.Name, &acc.AccountType,
+			&acc.ParentGUID, &acc.Placeholder, &acc.Description,
 			&acc.Metadata, &acc.Version, &acc.CreatedAt, &acc.UpdatedAt,
 			&acc.Balance, &acc.ReconciledBalance, &acc.LastReconciled); err != nil {
 			return nil, err

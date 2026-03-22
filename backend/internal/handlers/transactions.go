@@ -23,6 +23,7 @@ func (h *TransactionHandler) Routes() chi.Router {
 	r.Get("/", h.list)
 	r.Post("/", h.create)
 	r.Get("/{id}", h.get)
+	r.Put("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
 	r.Post("/splits/reconcile", h.batchReconcile)
 	r.Patch("/splits/{splitId}/toggle", h.toggleAcknowledge)
@@ -76,6 +77,35 @@ func (h *TransactionHandler) get(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, txn)
+}
+
+func (h *TransactionHandler) update(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req services.UpdateTransactionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	txn, err := h.svc.UpdateTransaction(r.Context(), id, req)
+	if err != nil {
+		if errors.Is(err, services.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "transaction not found")
+			return
+		}
+		if errors.Is(err, services.ErrUnbalancedTransaction) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		if errors.Is(err, services.ErrPlaceholderAccount) {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusOK, txn)
 }
 

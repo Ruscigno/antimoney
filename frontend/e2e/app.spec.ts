@@ -2,10 +2,10 @@ import { test, expect } from '@playwright/test';
 
 // ──────────────────────────────────────────────
 // Antimoney — Full E2E Test Suite
-// Requires: backend on :8002, frontend on :5174
+// Requires: backend on :8000, frontend on :5173
 // ──────────────────────────────────────────────
 
-const BASE = 'http://localhost:5174';
+const BASE = 'http://localhost:5173';
 
 test.describe.serial('Antimoney E2E', () => {
     let authToken = '';
@@ -74,11 +74,11 @@ test.describe.serial('Antimoney E2E', () => {
         await page.goto(`${BASE}/accounts`);
         await page.waitForSelector('.account-tree');
 
-        await expect(page.locator('text=Ativos')).toBeVisible();
-        await expect(page.locator('text=Passivos')).toBeVisible();
-        await expect(page.locator('text=Receitas')).toBeVisible();
-        await expect(page.locator('text=Despesas')).toBeVisible();
-        await expect(page.locator('text=Conta Corrente')).toBeVisible();
+        await expect(page.locator('text=Ativos').first()).toBeVisible();
+        await expect(page.locator('text=Passivos').first()).toBeVisible();
+        await expect(page.locator('text=Receitas').first()).toBeVisible();
+        await expect(page.locator('text=Despesas').first()).toBeVisible();
+        await expect(page.locator('text=Conta Corrente').first()).toBeVisible();
     });
 
     // ── 4. Account Register ─────────────────────
@@ -141,6 +141,14 @@ test.describe.serial('Antimoney E2E', () => {
         await page.keyboard.press('Alt+3');
         await page.waitForURL(`${BASE}/transactions`);
         await expect(page.locator('.page-title')).toContainText('Transactions');
+    });
+
+    test('Alt+4 navigates to Data Management', async ({ page }) => {
+        await page.goto(BASE);
+        await page.waitForSelector('.page-title');
+        await page.keyboard.press('Alt+4');
+        await page.waitForURL(`${BASE}/data`);
+        await expect(page.locator('.page-title')).toContainText('Data Management');
     });
 
     // ── 8. Transaction Form auto-fill + create ──
@@ -249,5 +257,46 @@ test.describe.serial('Antimoney E2E', () => {
             initialRows,
             { timeout: 10000 }
         );
+    });
+
+    // ── 13. Data Management ─────────────────────
+    test('Data Management page elements are visible', async ({ page }) => {
+        await page.goto(`${BASE}/data`);
+        await page.waitForSelector('.page-title');
+
+        await expect(page.locator('.page-title')).toHaveText('Data Management');
+        // Check for Export and Import buttons
+        await expect(page.locator('button', { hasText: 'Export to JSON' })).toBeVisible();
+        await expect(page.locator('button', { hasText: 'Import from JSON' })).toBeVisible();
+    });
+
+    // ── 14. Import from JSON ─────────────────────
+    test('Import from JSON replaces existing data', async ({ page }) => {
+        await page.goto(`${BASE}/data`);
+        await page.waitForSelector('.page-title');
+
+        // 1. Export current data to get valid GUIDs for this user
+        const downloadPromise = page.waitForEvent('download');
+        await page.locator('button', { hasText: 'Export to JSON' }).click();
+        const download = await downloadPromise;
+        const exportPath = 'test-results/export.json';
+        await download.saveAs(exportPath);
+
+        // 2. Import it back
+        const fileChooserPromise = page.waitForEvent('filechooser');
+        await page.locator('button', { hasText: 'Import from JSON' }).click();
+        const fileChooser = await fileChooserPromise;
+        await fileChooser.setFiles(exportPath);
+
+        // Wait for success message
+        await page.waitForSelector('text=import successful', { timeout: 10000 });
+
+        // Verify data: check Chart of Accounts
+        await page.goto(`${BASE}/accounts`);
+        await page.waitForSelector('.account-tree');
+
+        // Verify that seeded accounts are still there (re-imported)
+        await expect(page.locator('text=Ativos').first()).toBeVisible();
+        await expect(page.locator('text=Passivos').first()).toBeVisible();
     });
 });

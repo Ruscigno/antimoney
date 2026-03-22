@@ -16,7 +16,7 @@ interface AuthContextValue {
     loading: boolean;
 }
 
-const AuthContext = createContext<AuthContextValue | null>(null);
+export const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function useAuth() {
     const ctx = useContext(AuthContext);

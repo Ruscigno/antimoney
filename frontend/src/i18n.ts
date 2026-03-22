@@ -10,6 +10,19 @@ const translations: Record<Locale, Record<string, string>> = {
         'nav.transactions': 'Transactions',
         'nav.settings': 'Settings',
         'nav.currencies': 'Currencies',
+        'nav.data': 'Data Management',
+
+        // Data Management
+        'data.exportSuccess': 'Export successful!',
+        'data.exportError': 'Export failed',
+        'data.importSuccess': 'Import successful!',
+        'data.importError': 'Import failed',
+        'data.exportTitle': 'Export Data',
+        'data.exportDesc': 'Download your accounts and transactions as a JSON file.',
+        'data.exportBtn': 'Export to JSON',
+        'data.importTitle': 'Import Data',
+        'data.importDesc': 'Import accounts and transactions from a JSON file. This will REPLACE your current book data.',
+        'data.importBtn': 'Import from JSON',
 
         // Dashboard
         'dashboard.title': 'Dashboard',
@@ -167,6 +180,21 @@ const translations: Record<Locale, Record<string, string>> = {
         'nav.transactions': 'Transações',
         'nav.settings': 'Configurações',
         'nav.currencies': 'Moedas',
+        'nav.data': 'Gerenciamento de Dados',
+
+        // Data Management
+        'data.exportSuccess': 'Exportação concluída!',
+        'data.exportError': 'Falha na exportação',
+        'data.importSuccess': 'Importação concluída!',
+        'data.importError': 'Falha na importação',
+        'data.exportTitle': 'Exportar Dados',
+        'data.exportDesc': 'Baixe suas contas e transações como um arquivo JSON.',
+        'data.exportBtn': 'Exportar para JSON',
+        'data.importTitle': 'Importar Dados',
+        'data.importDesc': 'Importar contas e transações de um arquivo JSON. Isso irá SUBSTITUIR os dados atuais do seu livro.',
+        'data.importBtn': 'Importar de JSON',
+
+        // Dashboard
         'dashboard.title': 'Dashboard',
         'dashboard.subtitle': 'Visão geral das suas finanças',
         'dashboard.assets': 'Ativos',

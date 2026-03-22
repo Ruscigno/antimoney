@@ -11,6 +11,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/user/antimoney/internal/seed"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -180,6 +181,11 @@ func (s *UserService) Register(ctx context.Context, req RegisterRequest) (*AuthR
 	).Scan(&bookGUID)
 	if err != nil {
 		return nil, fmt.Errorf("create book: %w", err)
+	}
+
+	// Seed user book with default chart of accounts
+	if err := seed.SeedUserBook(ctx, s.pool, bookGUID); err != nil {
+		return nil, fmt.Errorf("seed user book: %w", err)
 	}
 
 	// Generate token

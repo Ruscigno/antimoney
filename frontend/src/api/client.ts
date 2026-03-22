@@ -1,4 +1,4 @@
-import type { Account, Commodity, Transaction, RegisterEntry, CreateTransactionRequest } from '../types';
+import type { Account, Transaction, RegisterEntry, CreateTransactionRequest } from '../types';
 
 const API_BASE = '/api';
 
@@ -45,7 +45,6 @@ export const getAccountRegister = (id: string) => fetchJSON<RegisterEntry[]>(`/a
 export const createAccount = (data: {
     name: string;
     account_type: string;
-    commodity_guid: string;
     parent_guid: string | null;
     placeholder: boolean;
     description: string;
@@ -75,6 +74,12 @@ export const createTransaction = (data: CreateTransactionRequest) =>
         body: JSON.stringify(data),
     });
 
+export const updateTransaction = (id: string, data: CreateTransactionRequest) =>
+    fetchJSON<Transaction>(`/transactions/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+
 export const deleteTransaction = (id: string) =>
     fetchJSON<void>(`/transactions/${id}`, { method: 'DELETE' });
 
@@ -99,14 +104,3 @@ export const reconcileAccountSplits = (accountId: string, accountGuids: string[]
         body: JSON.stringify({ account_guids: accountGuids }),
     });
 
-// Commodities
-export const getCommodities = () => fetchJSON<Commodity[]>('/commodities');
-
-export const createCommodity = (data: { namespace: string; mnemonic: string; fullname: string; fraction: number; }) =>
-    fetchJSON<Commodity>('/commodities', {
-        method: 'POST',
-        body: JSON.stringify(data),
-    });
-
-export const deleteCommodity = (id: string) =>
-    fetchJSON<void>(`/commodities/${id}`, { method: 'DELETE' });

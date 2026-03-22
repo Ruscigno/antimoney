@@ -41,29 +41,19 @@ type User struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-type Commodity struct {
-	GUID      string    `json:"guid"`
-	Namespace string    `json:"namespace"`
-	Mnemonic  string    `json:"mnemonic"`
-	Fullname  string    `json:"fullname"`
-	Fraction  int       `json:"fraction"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type Account struct {
-	GUID          string          `json:"guid"`
-	Name          string          `json:"name"`
-	AccountType   AccountType     `json:"account_type"`
-	CommodityGUID string          `json:"commodity_guid"`
-	CommoditySCU  int             `json:"commodity_scu"`
-	ParentGUID    *string         `json:"parent_guid"`
-	BookGUID      *string         `json:"book_guid,omitempty"`
-	Placeholder   bool            `json:"placeholder"`
-	Description   string          `json:"description"`
-	Metadata      json.RawMessage `json:"metadata"`
-	Version       int             `json:"version"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	GUID        string      `json:"guid"`
+	Name        string      `json:"name"`
+	AccountType AccountType `json:"account_type"`
+
+	ParentGUID  *string         `json:"parent_guid"`
+	BookGUID    *string         `json:"book_guid,omitempty"`
+	Placeholder bool            `json:"placeholder"`
+	Description string          `json:"description"`
+	Metadata    json.RawMessage `json:"metadata"`
+	Version     int             `json:"version"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 
 	// Computed fields (not stored directly)
 	Children          []*Account `json:"children,omitempty"`
@@ -80,16 +70,17 @@ type Book struct {
 }
 
 type Transaction struct {
-	GUID         string          `json:"guid"`
-	CurrencyGUID string          `json:"currency_guid"`
-	BookGUID     *string         `json:"book_guid,omitempty"`
-	PostDate     time.Time       `json:"post_date"`
-	EnterDate    time.Time       `json:"enter_date"`
-	Description  string          `json:"description"`
-	Metadata     json.RawMessage `json:"metadata"`
-	Version      int             `json:"version"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	GUID     string `json:"guid"`
+	CustomID string `json:"custom_id"`
+
+	BookGUID    *string         `json:"book_guid,omitempty"`
+	PostDate    time.Time       `json:"post_date"`
+	EnterDate   time.Time       `json:"enter_date"`
+	Description string          `json:"description"`
+	Metadata    json.RawMessage `json:"metadata"`
+	Version     int             `json:"version"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 
 	// Aggregate: always loaded with the transaction
 	Splits []Split `json:"splits"`
@@ -113,6 +104,7 @@ type Split struct {
 // RegisterEntry represents a single row in the account register view.
 type RegisterEntry struct {
 	TransactionGUID     string    `json:"transaction_guid"`
+	CustomID            string    `json:"custom_id"`
 	PostDate            time.Time `json:"post_date"`
 	Description         string    `json:"description"`
 	TransferAccount     string    `json:"transfer_account"`
