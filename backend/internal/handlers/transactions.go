@@ -25,6 +25,7 @@ func (h *TransactionHandler) Routes() chi.Router {
 	r.Get("/{id}", h.get)
 	r.Delete("/{id}", h.delete)
 	r.Post("/splits/reconcile", h.batchReconcile)
+	r.Patch("/splits/{splitId}/toggle", h.toggleAcknowledge)
 	return r
 }
 
@@ -101,6 +102,28 @@ func (h *TransactionHandler) batchReconcile(w http.ResponseWriter, r *http.Reque
 
 	if err := h.svc.BatchReconcileSplits(r.Context(), req.SplitGUIDs); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *TransactionHandler) toggleAcknowledge(w http.ResponseWriter, r *http.Request) {
+	splitID := chi.URLParam(r, "splitId")
+
+	var req struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.svc.ToggleSplitAcknowledge(r.Context(), splitID, req.State); err != nil {
+		if errors.Is(err, services.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "split not found")
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

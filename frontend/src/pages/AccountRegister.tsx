@@ -65,7 +65,7 @@ export default function AccountRegister() {
                 </div>
             </div>
 
-            <Register entries={entries} accountName={account.name} />
+            <Register entries={entries} accountName={account.name} onReconcileChanged={loadData} />
 
             {showForm && (
                 <TransactionForm

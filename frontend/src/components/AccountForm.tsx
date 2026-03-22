@@ -56,6 +56,15 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
     const [loading, setLoading] = useState(false);
     const [commodityGuid, setCommodityGuid] = useState('');
 
+    // ESC key to close
+    useEffect(() => {
+        const handleKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+        };
+        document.addEventListener('keydown', handleKey);
+        return () => document.removeEventListener('keydown', handleKey);
+    }, [onClose]);
+
     useEffect(() => {
         getCommodities().then(commodities => {
             const brl = commodities.find(c => c.mnemonic === 'BRL') || commodities[0];
@@ -67,6 +76,7 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
     const rootAccount = accounts.find(a => a.account_type === 'ROOT');
     const tree = buildTree(accounts);
     const flatList = flattenAccounts(tree);
+
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -80,10 +90,13 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
         setLoading(true);
         try {
             if (isEdit) {
+                const parent = parentGuid || rootAccount?.guid || null;
                 await updateAccount(editingAccount!.guid, {
                     name: name.trim(),
                     description: description.trim(),
                     placeholder,
+                    account_type: accountType,
+                    parent_guid: parent,
                     version: editingAccount!.version,
                 });
             } else {
@@ -105,6 +118,7 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
             setLoading(false);
         }
     };
+
 
     return (
         <div className="modal-overlay" onClick={onClose}>
@@ -139,58 +153,56 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
                         />
                     </div>
 
-                    {!isEdit && (
-                        <>
-                            <div className="form-group" style={{ marginBottom: 16 }}>
-                                <label className="form-label">{t('accounts.parentAccount')}</label>
-                                <select
-                                    className="form-input"
-                                    value={parentGuid}
-                                    onChange={e => setParentGuid(e.target.value)}
-                                    style={{ padding: '8px 12px' }}
-                                >
-                                    <option value="">{t('accounts.topLevel')}</option>
-                                    {flatList
-                                        .filter(f => editingAccount ? f.account.guid !== editingAccount.guid : true)
-                                        .map(({ account: a, depth }) => (
-                                            <option key={a.guid} value={a.guid}>
-                                                {'  '.repeat(depth)}{a.name}
-                                            </option>
-                                        ))}
-                                </select>
-                            </div>
+                    {/* Parent Account */}
+                    <div className="form-group" style={{ marginBottom: 16 }}>
+                        <label className="form-label">{t('accounts.parentAccount')}</label>
+                        <select
+                            className="form-input"
+                            value={parentGuid}
+                            onChange={e => setParentGuid(e.target.value)}
+                            style={{ padding: '8px 12px' }}
+                        >
+                            <option value="">{t('accounts.topLevel')}</option>
+                            {flatList
+                                .filter(f => editingAccount ? f.account.guid !== editingAccount.guid : true)
+                                .map(({ account: a, depth }) => (
+                                    <option key={a.guid} value={a.guid}>
+                                        {'  '.repeat(depth)}{a.name}
+                                    </option>
+                                ))}
+                        </select>
+                    </div>
 
-                            <div className="form-group" style={{ marginBottom: 16 }}>
-                                <label className="form-label">{t('accounts.accountType')}</label>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                                    {USER_ACCOUNT_TYPES.map(type => {
-                                        const color = ACCOUNT_TYPE_COLORS[type];
-                                        const isSelected = accountType === type;
-                                        return (
-                                            <button
-                                                key={type}
-                                                type="button"
-                                                onClick={() => setAccountType(type)}
-                                                style={{
-                                                    padding: '6px 14px',
-                                                    borderRadius: 6,
-                                                    border: isSelected ? `2px solid ${color}` : '2px solid transparent',
-                                                    background: isSelected ? `${color}22` : 'var(--bg-tertiary)',
-                                                    color: isSelected ? color : 'var(--text-secondary)',
-                                                    fontWeight: isSelected ? 600 : 400,
-                                                    fontSize: '0.8rem',
-                                                    cursor: 'pointer',
-                                                    transition: 'all 0.15s',
-                                                }}
-                                            >
-                                                {t(`type.${type}` as any)}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        </>
-                    )}
+                    {/* Account Type */}
+                    <div className="form-group" style={{ marginBottom: 16 }}>
+                        <label className="form-label">{t('accounts.accountType')}</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {USER_ACCOUNT_TYPES.map(type => {
+                                const color = ACCOUNT_TYPE_COLORS[type];
+                                const isSelected = accountType === type;
+                                return (
+                                    <button
+                                        key={type}
+                                        type="button"
+                                        onClick={() => setAccountType(type)}
+                                        style={{
+                                            padding: '6px 14px',
+                                            borderRadius: 6,
+                                            border: isSelected ? `2px solid ${color}` : '2px solid transparent',
+                                            background: isSelected ? `${color}22` : 'var(--bg-tertiary)',
+                                            color: isSelected ? color : 'var(--text-secondary)',
+                                            fontWeight: isSelected ? 600 : 400,
+                                            fontSize: '0.8rem',
+                                            cursor: 'pointer',
+                                            transition: 'all 0.15s',
+                                        }}
+                                    >
+                                        {t(`type.${type}` as any)}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
 
                     <div className="form-group" style={{ marginBottom: 16 }}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>

@@ -1,13 +1,15 @@
 import { useNavigate } from 'react-router-dom';
 import type { RegisterEntry } from '../types';
 import { t, formatCurrency, formatDate } from '../i18n';
+import { toggleSplitAcknowledge } from '../api/client';
 
 interface RegisterProps {
     entries: RegisterEntry[];
     accountName: string;
+    onReconcileChanged?: () => void;
 }
 
-export default function Register({ entries, accountName }: RegisterProps) {
+export default function Register({ entries, accountName, onReconcileChanged }: RegisterProps) {
     const navigate = useNavigate();
 
     if (!entries || entries.length === 0) {
@@ -31,6 +33,26 @@ export default function Register({ entries, accountName }: RegisterProps) {
             case 'y': return 'var(--color-income)';
             case 'c': return 'var(--color-info, #60a5fa)';
             default: return 'var(--text-muted)';
+        }
+    };
+    const reconcileTooltip = (state: string) => {
+        switch (state) {
+            case 'y': return t('register.reconcile.tooltip.y');
+            case 'c': return t('register.reconcile.tooltip.c');
+            default: return t('register.reconcile.tooltip.n');
+        }
+    };
+
+    // Click logic: n→c, c→n, y→n (can never set to y here)
+    const handleReconcileClick = async (splitGuid: string, currentState: string) => {
+        let newState: string;
+        if (currentState === 'n') newState = 'c';
+        else newState = 'n'; // c→n or y→n
+        try {
+            await toggleSplitAcknowledge(splitGuid, newState);
+            onReconcileChanged?.();
+        } catch (err) {
+            console.error('Failed to toggle reconcile:', err);
         }
     };
 
@@ -85,8 +107,21 @@ export default function Register({ entries, accountName }: RegisterProps) {
                                     <span>{entry.transfer_account}</span>
                                 )}
                             </td>
-                            <td style={{ textAlign: 'center', color: reconcileColor(entry.reconcile_state), fontSize: '1rem' }}>
-                                {reconcileIcon(entry.reconcile_state)}
+                            <td style={{ textAlign: 'center' }}>
+                                <button
+                                    onClick={() => handleReconcileClick(entry.split_guid, entry.reconcile_state)}
+                                    title={reconcileTooltip(entry.reconcile_state)}
+                                    style={{
+                                        background: 'none', border: 'none', cursor: 'pointer',
+                                        fontSize: '1rem', color: reconcileColor(entry.reconcile_state),
+                                        padding: '2px 6px', borderRadius: 4,
+                                        transition: 'transform 0.12s',
+                                    }}
+                                    onMouseEnter={e => { (e.target as HTMLElement).style.transform = 'scale(1.3)'; }}
+                                    onMouseLeave={e => { (e.target as HTMLElement).style.transform = 'scale(1)'; }}
+                                >
+                                    {reconcileIcon(entry.reconcile_state)}
+                                </button>
                             </td>
                             <td className="col-deposit">
                                 {entry.deposit != null ? formatCurrency(entry.deposit) : ''}

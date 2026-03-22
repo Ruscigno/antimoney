@@ -52,6 +52,9 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.memo': 'Memo',
         'register.noEntries': 'No transactions recorded in',
         'register.reconcile': 'R',
+        'register.reconcile.tooltip.n': 'Not reconciled — click to acknowledge',
+        'register.reconcile.tooltip.c': 'Acknowledged — click to clear',
+        'register.reconcile.tooltip.y': 'Reconciled — click to un-reconcile',
         'register.jump': 'Jump to account',
 
         // Reconcile wizard
@@ -186,6 +189,9 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.memo': 'Memo',
         'register.noEntries': 'Nenhuma transação registrada em',
         'register.reconcile': 'R',
+        'register.reconcile.tooltip.n': 'Não reconciliado — clique para reconhecer',
+        'register.reconcile.tooltip.c': 'Reconhecido — clique para limpar',
+        'register.reconcile.tooltip.y': 'Reconciliado — clique para desfazer',
         'register.jump': 'Ir para conta',
 
         // Reconcile wizard

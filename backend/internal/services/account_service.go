@@ -34,10 +34,12 @@ type CreateAccountRequest struct {
 }
 
 type UpdateAccountRequest struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	Placeholder *bool   `json:"placeholder"`
-	Version     int     `json:"version"` // Required for OCC
+	Name        *string             `json:"name"`
+	Description *string             `json:"description"`
+	Placeholder *bool               `json:"placeholder"`
+	AccountType *models.AccountType `json:"account_type"`
+	ParentGUID  *string             `json:"parent_guid"`
+	Version     int                 `json:"version"` // Required for OCC
 }
 
 func (s *AccountService) CreateAccount(ctx context.Context, req CreateAccountRequest) (*models.Account, error) {
@@ -107,10 +109,13 @@ func (s *AccountService) UpdateAccount(ctx context.Context, guid string, req Upd
 			name = COALESCE($2, name),
 			description = COALESCE($3, description),
 			placeholder = COALESCE($4, placeholder),
+			account_type = COALESCE($8, account_type),
+			parent_guid = COALESCE($9, parent_guid),
 			version = version + 1,
 			updated_at = $5
 		 WHERE guid = $1 AND version = $6 AND book_guid = $7`,
 		guid, req.Name, req.Description, req.Placeholder, now, req.Version, bookGUID,
+		req.AccountType, req.ParentGUID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("update account: %w", err)

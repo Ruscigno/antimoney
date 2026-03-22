@@ -433,6 +433,32 @@ func (s *TransactionService) getTransferAccount(ctx context.Context, txGUID, exc
 	return "-- Split Transaction --", "", nil
 }
 
+// ToggleSplitAcknowledge toggles a split between 'n' and 'c' states.
+// It also allows going from 'y' back to 'n'. Setting to 'y' is NOT allowed here
+// (must use BatchReconcileSplits via the reconcile wizard).
+func (s *TransactionService) ToggleSplitAcknowledge(ctx context.Context, splitGUID, newState string) error {
+	bookGUID := auth.BookGUIDFromCtx(ctx)
+
+	// Only allow setting to 'n' or 'c' — never 'y'
+	if newState != "n" && newState != "c" {
+		return fmt.Errorf("invalid state for toggle: %s (only n or c allowed)", newState)
+	}
+
+	result, err := s.pool.Exec(ctx,
+		`UPDATE splits SET reconcile_state = $1
+		 WHERE guid = $2 AND EXISTS (
+		   SELECT 1 FROM transactions t WHERE t.guid = splits.tx_guid AND t.book_guid = $3
+		 )`, newState, splitGUID, bookGUID,
+	)
+	if err != nil {
+		return fmt.Errorf("toggle reconcile state: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // BatchReconcileSplits sets the reconcile_state to 'y' for a list of split GUIDs.
 // This is used by the reconcile wizard to finalize reconciliation.
 func (s *TransactionService) BatchReconcileSplits(ctx context.Context, splitGUIDs []string) error {

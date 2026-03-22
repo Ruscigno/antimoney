@@ -55,6 +55,8 @@ export const updateAccount = (id: string, data: {
     name?: string;
     description?: string;
     placeholder?: boolean;
+    account_type?: string;
+    parent_guid?: string | null;
     version: number;
 }) => fetchJSON<Account>(`/accounts/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 
@@ -80,6 +82,12 @@ export const batchReconcileSplits = (splitGuids: string[]) =>
     fetchJSON<void>('/transactions/splits/reconcile', {
         method: 'POST',
         body: JSON.stringify({ split_guids: splitGuids }),
+    });
+
+export const toggleSplitAcknowledge = (splitId: string, state: string) =>
+    fetchJSON<void>(`/transactions/splits/${splitId}/toggle`, {
+        method: 'PATCH',
+        body: JSON.stringify({ state }),
     });
 
 export const getReconciledBalance = (accountId: string) =>
