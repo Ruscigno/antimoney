@@ -17,7 +17,7 @@ function buildTree(accounts: Account[]): Account[] {
     const roots: Account[] = [];
 
     accounts.forEach(a => {
-        map.set(a.guid, { ...a, children: [] });
+        map.set(a.guid, { ...a, children: [], aggregated_balance: a.balance || 0, aggregated_reconciled_balance: a.reconciled_balance || 0 } as Account);
     });
 
     accounts.forEach(a => {
@@ -30,6 +30,26 @@ function buildTree(accounts: Account[]): Account[] {
             roots.push(node);
         }
     });
+
+    // Recursive aggregation pass
+    function aggregate(node: Account) {
+        let bal = node.balance || 0;
+        let recBal = node.reconciled_balance || 0;
+        
+        if (node.children) {
+            node.children.forEach(child => {
+                const childResult = aggregate(child);
+                bal += childResult.bal;
+                recBal += childResult.recBal;
+            });
+        }
+        
+        node.aggregated_balance = bal;
+        node.aggregated_reconciled_balance = recBal;
+        return { bal, recBal };
+    }
+
+    roots.forEach(aggregate);
 
     return roots;
 }
@@ -116,7 +136,9 @@ function TreeNode({ account, depth, onEdit, onDelete, onReconcile, showReconcile
 
     const color = ACCOUNT_TYPE_COLORS[account.account_type] || '#64748b';
     const typeLabel = t(`type.${account.account_type}` as any);
-    const displayBalance = showReconciled ? account.reconciled_balance : (account.balance || 0);
+    const displayBalance = showReconciled ? (account.aggregated_reconciled_balance || 0) : (account.aggregated_balance || 0);
+    const isZero = Math.abs(displayBalance) < 0.005;
+    const finalBalance = isZero ? 0 : displayBalance;
 
     return (
         <li className="account-tree-item">
@@ -180,19 +202,18 @@ function TreeNode({ account, depth, onEdit, onDelete, onReconcile, showReconcile
                     color: 'var(--text-secondary)',
                     width: 90,
                     textAlign: 'right',
-                    marginLeft: 'auto',
                     flexShrink: 0,
                 }}>
                     {account.last_reconciled ? formatDate(account.last_reconciled) : ''}
                 </span>
 
                 <span className="account-balance" style={{
-                    color: displayBalance >= 0 ? 'var(--color-income)' : 'var(--color-expense)',
+                    color: isZero ? 'var(--text-muted)' : (finalBalance >= 0 ? 'var(--color-income)' : 'var(--color-expense)'),
                     width: 110,
                     textAlign: 'right',
                     flexShrink: 0,
                 }}>
-                    {formatCurrency(displayBalance)}
+                    {formatCurrency(finalBalance)}
                 </span>
             </div>
             {expanded && hasChildren && (

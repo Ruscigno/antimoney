@@ -14,19 +14,23 @@ export default function Accounts() {
     const [showReconciled, setShowReconciled] = useState(false);
     const [showReconcile, setShowReconcile] = useState(false);
     const [reconcileData, setReconcileData] = useState<{ name: string, guids: string[] } | null>(null);
+    const [filterToday, setFilterToday] = useState(true);
 
     const loadData = () => {
         setLoading(true);
-        const now = new Date();
-        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        let end: string | undefined = undefined;
+        if (filterToday) {
+            const now = new Date();
+            end = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        }
         
-        getAccounts(undefined, today)
+        getAccounts(undefined, end)
             .then(setAccounts)
             .catch(console.error)
             .finally(() => setLoading(false));
     };
 
-    useEffect(() => { loadData(); }, []);
+    useEffect(() => { loadData(); }, [filterToday]);
 
     const handleEdit = (account: Account) => {
         setEditingAccount(account);
@@ -79,41 +83,80 @@ export default function Accounts() {
                     <h1 className="page-title">{t('accounts.title')}</h1>
                     <p className="page-subtitle">{t('accounts.subtitle')}</p>
                 </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <div
-                        className="toggle-group"
-                        style={{
-                            display: 'inline-flex', borderRadius: 'var(--radius-sm)',
-                            border: '1px solid var(--border-color)', overflow: 'hidden',
-                        }}
-                    >
-                        <button
-                            className={`toggle-btn ${!showReconciled ? 'active' : ''}`}
-                            onClick={() => setShowReconciled(false)}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    
+                    <div className="toggle-group-container" style={{ display: 'flex', gap: 8 }}>
+                        <div
+                            className="toggle-group"
                             style={{
-                                padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
-                                border: 'none', cursor: 'pointer',
-                                background: !showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                                color: !showReconciled ? '#fff' : 'var(--text-secondary)',
-                                transition: 'all 0.15s',
+                                display: 'inline-flex', borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-color)', overflow: 'hidden',
                             }}
                         >
-                            {t('dashboard.total')}
-                        </button>
-                        <button
-                            className={`toggle-btn ${showReconciled ? 'active' : ''}`}
-                            onClick={() => setShowReconciled(true)}
+                            <button
+                                className={`toggle-btn ${filterToday ? 'active' : ''}`}
+                                onClick={() => setFilterToday(true)}
+                                style={{
+                                    padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+                                    border: 'none', cursor: 'pointer',
+                                    background: filterToday ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                                    color: filterToday ? '#fff' : 'var(--text-secondary)',
+                                    transition: 'all 0.15s',
+                                }}
+                            >
+                                {t('register.today')}
+                            </button>
+                            <button
+                                className={`toggle-btn ${!filterToday ? 'active' : ''}`}
+                                onClick={() => setFilterToday(false)}
+                                style={{
+                                    padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+                                    border: 'none', cursor: 'pointer',
+                                    background: !filterToday ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                                    color: !filterToday ? '#fff' : 'var(--text-secondary)',
+                                    transition: 'all 0.15s',
+                                }}
+                            >
+                                {t('dashboard.total')}
+                            </button>
+                        </div>
+
+                        <div
+                            className="toggle-group"
                             style={{
-                                padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
-                                border: 'none', cursor: 'pointer',
-                                background: showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
-                                color: showReconciled ? '#fff' : 'var(--text-secondary)',
-                                transition: 'all 0.15s',
+                                display: 'inline-flex', borderRadius: 'var(--radius-sm)',
+                                border: '1px solid var(--border-color)', overflow: 'hidden',
                             }}
                         >
-                            {t('dashboard.reconciled')}
-                        </button>
+                            <button
+                                className={`toggle-btn ${!showReconciled ? 'active' : ''}`}
+                                onClick={() => setShowReconciled(false)}
+                                style={{
+                                    padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+                                    border: 'none', cursor: 'pointer',
+                                    background: !showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                                    color: !showReconciled ? '#fff' : 'var(--text-secondary)',
+                                    transition: 'all 0.15s',
+                                }}
+                            >
+                                {t('register.balance')}
+                            </button>
+                            <button
+                                className={`toggle-btn ${showReconciled ? 'active' : ''}`}
+                                onClick={() => setShowReconciled(true)}
+                                style={{
+                                    padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+                                    border: 'none', cursor: 'pointer',
+                                    background: showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                                    color: showReconciled ? '#fff' : 'var(--text-secondary)',
+                                    transition: 'all 0.15s',
+                                }}
+                            >
+                                {t('dashboard.reconciled')}
+                            </button>
+                        </div>
                     </div>
+
                     <button className="btn btn-primary" onClick={() => setShowForm(true)}>
                         {t('accounts.newAccount')}
                     </button>

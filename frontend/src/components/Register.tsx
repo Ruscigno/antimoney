@@ -10,9 +10,10 @@ interface RegisterProps {
     accountType?: AccountType;
     onReconcileChanged?: () => void;
     onEditTransaction?: (guid: string) => void;
+    onDeleteTransaction?: (guid: string) => void;
 }
 
-export default function Register({ entries, accountName, accountType, onReconcileChanged, onEditTransaction }: RegisterProps) {
+export default function Register({ entries, accountName, accountType, onReconcileChanged, onEditTransaction, onDeleteTransaction }: RegisterProps) {
     const navigate = useNavigate();
     const todayRef = useRef<HTMLTableRowElement>(null);
 
@@ -105,6 +106,7 @@ export default function Register({ entries, accountName, accountType, onReconcil
                         <th style={{ textAlign: 'right' }}>{withdrawalLabel}</th>
                         <th style={{ textAlign: 'right' }}>{t('register.balance')}</th>
                         <th>{t('register.memo')}</th>
+                        <th style={{ width: 32 }}></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -113,7 +115,16 @@ export default function Register({ entries, accountName, accountType, onReconcil
                         const postDateStr = `${postDate.getFullYear()}-${String(postDate.getMonth() + 1).padStart(2, '0')}-${String(postDate.getDate()).padStart(2, '0')}`;
                         const isToday = postDateStr === todayStr;
                         const displayBalance = isCreditNormal ? -entry.balance : entry.balance;
+                        const isZero = Math.abs(displayBalance) < 0.005;
+                        const finalBalance = isZero ? 0 : displayBalance;
                         
+                        const handleDelete = (e: React.MouseEvent) => {
+                            e.stopPropagation();
+                            if (window.confirm(t('transactions.confirmDelete'))) {
+                                onDeleteTransaction?.(entry.transaction_guid);
+                            }
+                        };
+
                         return (
                             <tr
                                 key={`${entry.transaction_guid}-${i}`}
@@ -182,10 +193,29 @@ export default function Register({ entries, accountName, accountType, onReconcil
                                         : (entry.withdrawal != null ? formatCurrency(entry.withdrawal) : '')
                                     }
                                 </td>
-                                <td className="col-balance" style={{ color: displayBalance >= 0 ? 'var(--color-income)' : 'var(--color-expense)' }}>
-                                    {formatCurrency(displayBalance)}
+                                <td className="col-balance" style={{ color: isZero ? 'var(--text-muted)' : (finalBalance >= 0 ? 'var(--color-income)' : 'var(--color-expense)') }}>
+                                    {formatCurrency(finalBalance)}
                                 </td>
                                 <td className="col-memo">{entry.split_memo}</td>
+                                <td style={{ textAlign: 'center' }}>
+                                    {onDeleteTransaction && (
+                                        <button
+                                            className="btn-delete-row"
+                                            onClick={handleDelete}
+                                            title={t('transactions.delete')}
+                                            style={{
+                                                background: 'none', border: 'none', cursor: 'pointer',
+                                                color: 'var(--color-expense)', opacity: 0.4,
+                                                fontSize: '0.9rem', transition: 'opacity 0.2s',
+                                                padding: '4px'
+                                            }}
+                                            onMouseEnter={e => { (e.target as HTMLButtonElement).style.opacity = '1'; }}
+                                            onMouseLeave={e => { (e.target as HTMLButtonElement).style.opacity = '0.4'; }}
+                                        >
+                                            🗑
+                                        </button>
+                                    )}
+                                </td>
                             </tr>
                         );
                     })}

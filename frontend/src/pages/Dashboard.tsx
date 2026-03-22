@@ -156,7 +156,7 @@ function HorizBars({ items }: { items: { label: string; value: number; color: st
                             transition: 'width 0.5s ease',
                         }} />
                     </div>
-                    <span style={{ minWidth: 80, fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>
+                    <span style={{ minWidth: 80, fontSize: '0.72rem', fontWeight: 600, color: Math.abs(item.value) < 0.005 ? 'var(--text-muted)' : 'var(--text-primary)', textAlign: 'right' }}>
                         {formatCurrency(item.value)}
                     </span>
                 </div>
@@ -178,7 +178,7 @@ function CashFlowBars({ income, expenses }: { income: number; expenses: number }
                     <span style={{ fontSize: '0.75rem', color: 'var(--color-income)', fontWeight: 600 }}>
                         ↓ {t('dashboard.moneyIn')}
                     </span>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-income)' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: Math.abs(income) < 0.005 ? 'var(--text-muted)' : 'var(--color-income)' }}>
                         {formatCurrency(income)}
                     </span>
                 </div>
@@ -197,7 +197,7 @@ function CashFlowBars({ income, expenses }: { income: number; expenses: number }
                     <span style={{ fontSize: '0.75rem', color: 'var(--color-expense)', fontWeight: 600 }}>
                         ↑ {t('dashboard.moneyOut')}
                     </span>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-expense)' }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: Math.abs(expenses) < 0.005 ? 'var(--text-muted)' : 'var(--color-expense)' }}>
                         {formatCurrency(expenses)}
                     </span>
                 </div>
@@ -220,7 +220,7 @@ function CashFlowBars({ income, expenses }: { income: number; expenses: number }
                 <span style={{ fontSize: '0.72rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                     {net >= 0 ? '📈' : '📉'} Net
                 </span>
-                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: net >= 0 ? 'var(--color-income)' : 'var(--color-expense)' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 700, color: Math.abs(net) < 0.005 ? 'var(--text-muted)' : (net >= 0 ? 'var(--color-income)' : 'var(--color-expense)') }}>
                     {net >= 0 ? '+' : ''}{formatCurrency(net)}
                 </span>
             </div>
@@ -254,13 +254,16 @@ function ToggleGroup({ value, onChange }: { value: boolean; onChange: (v: boolea
 function MetricCard({ icon, label, value, colorVar, small }: {
     icon: string; label: string; value: number; colorVar: string; small?: boolean;
 }) {
+    const isZero = Math.abs(value) < 0.005;
+    const color = isZero ? 'var(--text-muted)' : (value >= 0 ? 'var(--text-primary)' : 'var(--color-expense)');
+    
     return (
         <div className="stat-card" style={{
             display: 'flex', flexDirection: 'column', gap: 2,
             padding: small ? '10px 14px' : '14px 18px',
             background: 'var(--bg-secondary)',
             borderRadius: 'var(--radius-md)',
-            borderLeft: `3px solid var(--color-${colorVar})`,
+            borderLeft: `3px solid ${isZero ? 'var(--border-color)' : `var(--color-${colorVar})`}`,
             minWidth: 0,
         }}>
             <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
@@ -268,7 +271,7 @@ function MetricCard({ icon, label, value, colorVar, small }: {
             </span>
             <span style={{
                 fontSize: small ? '1rem' : '1.15rem', fontWeight: 700,
-                color: value >= 0 ? 'var(--text-primary)' : 'var(--color-expense)',
+                color: color,
             }}>
                 {formatCurrency(value)}
             </span>

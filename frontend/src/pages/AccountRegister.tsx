@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { getAccount, getAccountRegister } from '../api/client';
+import { getAccount, getAccountRegister, deleteTransaction } from '../api/client';
 import Register from '../components/Register';
 import TransactionForm from '../components/TransactionForm';
 import ReconcileWizard from '../components/ReconcileWizard';
@@ -37,6 +37,15 @@ export default function AccountRegister() {
             })
             .catch(console.error)
             .finally(() => setLoading(false));
+    };
+
+    const handleDeleteTransaction = async (guid: string) => {
+        try {
+            await deleteTransaction(guid);
+            loadData();
+        } catch (err: any) {
+            alert(err.message || 'Failed to delete transaction');
+        }
     };
 
     useEffect(() => {
@@ -79,6 +88,7 @@ export default function AccountRegister() {
                 accountType={account.account_type}
                 onReconcileChanged={loadData}
                 onEditTransaction={setEditTxGuid}
+                onDeleteTransaction={handleDeleteTransaction}
             />
 
             {(showForm || editTxGuid) && (

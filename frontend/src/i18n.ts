@@ -80,6 +80,7 @@ const translations: Record<Locale, Record<string, string>> = {
 
         // Register
         'register.date': 'Date',
+        'register.today': 'Today',
         'register.num': '#',
         'register.description': 'Description',
         'register.transfer': 'Transfer',
@@ -165,6 +166,8 @@ const translations: Record<Locale, Record<string, string>> = {
 
         // Common
         'common.loading': 'Loading...',
+        'common.save': 'Save',
+        'common.saving': 'Saving...',
         'common.newTransaction': '+ New Transaction',
         'common.actions': 'Actions',
 
@@ -261,6 +264,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'accounts.confirmReconcile': 'Reconciliar todas as transações desta conta?',
         'accounts.confirmReconcileChildren': 'Reconciliar todas as transações desta conta e das contas filhas?',
         'register.date': 'Data',
+        'register.today': 'Hoje',
         'register.num': '#',
         'register.description': 'Descrição',
         'register.transfer': 'Transferência',
@@ -336,6 +340,8 @@ const translations: Record<Locale, Record<string, string>> = {
         'form.cancel': 'Cancelar',
         'form.createError': 'Erro ao criar transação',
         'common.loading': 'Carregando...',
+        'common.save': 'Salvar',
+        'common.saving': 'Salvando...',
         'common.newTransaction': '+ Nova Transação',
         'common.actions': 'Ações',
         'type.ROOT': 'Raiz',
@@ -380,11 +386,12 @@ export function t(key: string): string {
 }
 
 export function formatCurrency(value: number): string {
+    const val = Math.abs(value) < 0.005 ? 0 : value;
     return new Intl.NumberFormat(currentLocale === 'pt-BR' ? 'pt-BR' : 'en-US', {
         style: 'currency',
         currency: 'BRL',
         minimumFractionDigits: 2,
-    }).format(value);
+    }).format(val);
 }
 
 export function formatDate(dateStr: string): string {

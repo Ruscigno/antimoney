@@ -20,6 +20,8 @@ export interface Account {
     version: number;
     balance: number;
     reconciled_balance: number;
+    aggregated_balance?: number;
+    aggregated_reconciled_balance?: number;
     last_reconciled?: string;
     children?: Account[];
 }
