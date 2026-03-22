@@ -116,3 +116,14 @@ type RegisterEntry struct {
 	SplitGUID           string    `json:"split_guid"`
 	ReconcileState      string    `json:"reconcile_state"`
 }
+
+// RegisterPage is a paginated response for the account register.
+type RegisterPage struct {
+	Entries     []RegisterEntry `json:"entries"`
+	HasBefore   bool            `json:"has_before"`
+	HasAfter    bool            `json:"has_after"`
+	FirstOffset int             `json:"first_offset"`
+	LastOffset  int             `json:"last_offset"`
+	TotalCount  int             `json:"total_count"`
+}
+

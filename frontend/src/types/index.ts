@@ -65,6 +65,15 @@ export interface RegisterEntry {
     reconcile_state: string;
 }
 
+export interface RegisterPage {
+    entries: RegisterEntry[];
+    has_before: boolean;
+    has_after: boolean;
+    first_offset: number;
+    last_offset: number;
+    total_count: number;
+}
+
 export interface CreateTransactionRequest {
     custom_id: string;
     post_date: string;

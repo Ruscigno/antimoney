@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
-import { getAccount, getAccountRegister, deleteTransaction, getAccounts } from '../api/client';
+import { getAccount, getAccountRegisterPaged, deleteTransaction, getAccounts } from '../api/client';
 import Register from '../components/Register';
 import TransactionForm from '../components/TransactionForm';
 import ReconcileWizard from '../components/ReconcileWizard';
@@ -9,27 +9,42 @@ import type { Account, RegisterEntry } from '../types';
 import { t } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
 
+const PAGE_SIZE = 50;
+
+function getTodayStr(): string {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
 export default function AccountRegister() {
     const { id } = useParams<{ id: string }>();
     const [account, setAccount] = useState<Account | null>(null);
     const [allAccounts, setAllAccounts] = useState<Account[]>([]);
     const [entries, setEntries] = useState<RegisterEntry[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [showForm, setShowForm] = useState(false);
     const [editTxGuid, setEditTxGuid] = useState<string | null>(null);
     const [showReconcile, setShowReconcile] = useState(false);
+    const [hasBefore, setHasBefore] = useState(false);
+    const [hasAfter, setHasAfter] = useState(false);
+
+    const firstOffsetRef = useRef<number | null>(null);
+    const lastOffsetRef = useRef<number | null>(null);
 
     // N shortcut opens new transaction form
     useShortcut('n', () => setShowForm(true), t('shortcuts.newTx'), undefined, []);
 
-    const loadData = () => {
+    // Initial load: fetch account info + page of entries around today
+    const loadInitialData = useCallback(() => {
         if (!id) return;
         setLoading(true);
-        Promise.all([getAccount(id), getAccountRegister(id), getAccounts()])
-            .then(([acc, reg, all]) => {
+        const todayStr = getTodayStr();
+        Promise.all([getAccount(id), getAccountRegisterPaged(id, todayStr, 'around', PAGE_SIZE), getAccounts()])
+            .then(([acc, page, all]) => {
                 setAccount(acc);
                 setAllAccounts(all);
-                const sorted = (reg || []).sort((a, b) => {
+                const sorted = (page.entries || []).sort((a, b) => {
                     if (a.post_date < b.post_date) return -1;
                     if (a.post_date > b.post_date) return 1;
                     const idA = a.custom_id || '';
@@ -37,23 +52,95 @@ export default function AccountRegister() {
                     return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
                 });
                 setEntries(sorted);
+                setHasBefore(page.has_before);
+                setHasAfter(page.has_after);
+                firstOffsetRef.current = page.first_offset;
+                lastOffsetRef.current = page.last_offset;
             })
             .catch(console.error)
             .finally(() => setLoading(false));
-    };
+    }, [id]);
+
+    // Load more entries (prepend older or append newer)
+    const loadMore = useCallback(async (direction: 'before' | 'after') => {
+        if (!id || loadingMore) return;
+        const cursor = direction === 'before' ? firstOffsetRef.current : lastOffsetRef.current;
+        if (cursor === null) return;
+
+        setLoadingMore(true);
+        try {
+            const page = await getAccountRegisterPaged(id, String(cursor), direction, PAGE_SIZE);
+            const newEntries = page.entries || [];
+            if (newEntries.length === 0) {
+                if (direction === 'before') setHasBefore(false);
+                else setHasAfter(false);
+                return;
+            }
+
+            setEntries(prev => {
+                // Deduplicate by split_guid
+                const existingGuids = new Set(prev.map(e => e.split_guid));
+                const unique = newEntries.filter(e => !existingGuids.has(e.split_guid));
+                if (unique.length === 0) {
+                    return prev;
+                }
+
+                const merged = direction === 'before'
+                    ? [...unique, ...prev]
+                    : [...prev, ...unique];
+
+                // Sort to be safe
+                merged.sort((a, b) => {
+                    if (a.post_date < b.post_date) return -1;
+                    if (a.post_date > b.post_date) return 1;
+                    const idA = a.custom_id || '';
+                    const idB = b.custom_id || '';
+                    return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
+                });
+
+                return merged;
+            });
+
+            if (direction === 'before') {
+                setHasBefore(page.has_before);
+                firstOffsetRef.current = page.first_offset;
+            } else {
+                setHasAfter(page.has_after);
+                lastOffsetRef.current = page.last_offset;
+            }
+        } catch (err) {
+            console.error('Failed to load more entries:', err);
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [id, loadingMore]);
+
+    // Handle reconcile state change locally without reloading
+    const handleReconcileStateChanged = useCallback((splitGuid: string, newState: string) => {
+        setEntries(prev => prev.map(entry =>
+            entry.split_guid === splitGuid
+                ? { ...entry, reconcile_state: newState }
+                : entry
+        ));
+    }, []);
+
+    // Full reload (after creating/editing/deleting transactions or finishing reconcile wizard)
+    const handleDataChanged = useCallback(() => {
+        loadInitialData();
+    }, [loadInitialData]);
 
     const handleDeleteTransaction = async (guid: string) => {
         try {
             await deleteTransaction(guid);
-            loadData();
+            handleDataChanged();
         } catch (err: any) {
             alert(err.message || 'Failed to delete transaction');
         }
     };
 
     useEffect(() => {
-        loadData();
-    }, [id]);
+        loadInitialData();
+    }, [loadInitialData]);
 
     if (loading) {
         return <div className="loading"><div className="loading-spinner" />{t('common.loading')}</div>;
@@ -90,15 +177,19 @@ export default function AccountRegister() {
                 entries={entries}
                 accountName={account.name}
                 accountType={account.account_type}
-                onReconcileChanged={loadData}
+                onReconcileStateChanged={handleReconcileStateChanged}
                 onEditTransaction={setEditTxGuid}
                 onDeleteTransaction={handleDeleteTransaction}
+                hasBefore={hasBefore}
+                hasAfter={hasAfter}
+                onLoadMore={loadMore}
+                loadingMore={loadingMore}
             />
 
             {(showForm || editTxGuid) && (
                 <TransactionForm
                     onClose={() => { setShowForm(false); setEditTxGuid(null); }}
-                    onCreated={loadData}
+                    onCreated={handleDataChanged}
                     defaultAccountGuid={account.guid}
                     editTxGuid={editTxGuid || undefined}
                 />
@@ -110,7 +201,7 @@ export default function AccountRegister() {
                     accountName={account.name}
                     accountType={account.account_type}
                     onClose={() => setShowReconcile(false)}
-                    onFinished={loadData}
+                    onFinished={handleDataChanged}
                 />
             )}
         </div>

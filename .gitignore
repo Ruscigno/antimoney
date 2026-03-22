@@ -47,5 +47,6 @@ frontend/test-output*.txt
 .terraform.lock.hcl
 
 # Large data
-scripts/transactions.csv
+scripts/*.csv
 test_filters.js
+scripts/*.json

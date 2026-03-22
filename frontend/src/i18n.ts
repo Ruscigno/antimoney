@@ -96,6 +96,8 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.reconcile.tooltip.c': 'Acknowledged — click to clear',
         'register.reconcile.tooltip.y': 'Reconciled — click to un-reconcile',
         'register.jump': 'Jump to account',
+        'register.loadOlder': 'Load older transactions',
+        'register.loadNewer': 'Load newer transactions',
 
         // Reconcile wizard
         'reconcile.title': 'Reconcile',
@@ -280,6 +282,8 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.reconcile.tooltip.c': 'Reconhecido — clique para limpar',
         'register.reconcile.tooltip.y': 'Reconciliado — clique para desfazer',
         'register.jump': 'Ir para conta',
+        'register.loadOlder': 'Carregar transações anteriores',
+        'register.loadNewer': 'Carregar transações recentes',
 
         // Reconcile wizard
         'reconcile.title': 'Reconciliar',

@@ -1,4 +1,4 @@
-import type { Account, Transaction, RegisterEntry, CreateTransactionRequest } from '../types';
+import type { Account, Transaction, RegisterEntry, RegisterPage, CreateTransactionRequest } from '../types';
 
 const API_BASE = '/api';
 
@@ -47,6 +47,15 @@ export const getAccounts = (start?: string, end?: string) => {
 };
 export const getAccount = (id: string) => fetchJSON<Account>(`/accounts/${id}`);
 export const getAccountRegister = (id: string) => fetchJSON<RegisterEntry[]>(`/accounts/${id}/register`);
+export const getAccountRegisterPaged = (
+    id: string,
+    cursorDate: string,
+    direction: 'before' | 'after' | 'around',
+    limit = 50,
+) => {
+    const params = new URLSearchParams({ cursor_date: cursorDate, direction, limit: String(limit) });
+    return fetchJSON<RegisterPage>(`/accounts/${id}/register?${params}`);
+};
 
 export const createAccount = (data: {
     name: string;

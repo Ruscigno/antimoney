@@ -79,7 +79,15 @@ export default function ReconcileWizard({ accountGuids, accountName, accountType
             );
             unreconciled.sort((a, b) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
 
+            const preSelected = new Set<string>();
+            unreconciled.forEach(e => {
+                if (e.reconcile_state === 'c') {
+                    preSelected.add(e.split_guid);
+                }
+            });
+
             setEntries(unreconciled);
+            setSelected(preSelected);
             setStep('select');
         } catch (err) {
             setError('Failed to load register');

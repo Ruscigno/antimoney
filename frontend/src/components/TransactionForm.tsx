@@ -32,6 +32,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         { account_guid: defaultAccountGuid || '', amount: '', memo: '' },
         { account_guid: '', amount: '', memo: '' },
     ]);
+    const [initialSplitsMap, setInitialSplitsMap] = useState<Record<string, number>>({});
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -57,6 +58,14 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                 setDescription(t.description);
                 setCustomId(t.custom_id || '');
                 setPostDate(t.post_date.split('T')[0]);
+                const initMap: Record<string, number> = {};
+                t.splits.forEach(s => {
+                    if (s.account_guid) {
+                        initMap[s.account_guid] = (initMap[s.account_guid] || 0) + (s.value_num / (s.value_denom || 1));
+                    }
+                });
+                setInitialSplitsMap(initMap);
+
                 setSplits(t.splits.map(s => ({
                     account_guid: s.account_guid,
                     amount: (s.value_num / (s.value_denom || 1)).toString(),
@@ -71,6 +80,30 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
     useEffect(() => {
         setTimeout(() => descriptionRef.current?.focus(), 100);
     }, []);
+
+    const evaluateMath = (expr: string): string => {
+        try {
+            const sanitized = expr.replace(/[^-()\d/*+., ]/g, '').replace(/,/g, '.');
+            if (!sanitized) return expr;
+            // eslint-disable-next-line
+            const result = new Function(`return (${sanitized})`)();
+            if (typeof result === 'number' && !isNaN(result) && isFinite(result)) {
+                return parseFloat(result.toFixed(2)).toString();
+            }
+        } catch {
+            // ignore
+        }
+        return expr;
+    };
+
+    const handleAmountBlur = (index: number) => {
+        const val = splits[index].amount;
+        if (!val) return;
+        const result = evaluateMath(val);
+        if (result !== val) {
+            updateSplit(index, 'amount', result);
+        }
+    };
 
     const updateSplit = (index: number, field: keyof SplitInput, value: string) => {
         const updated = [...splits];
@@ -118,7 +151,8 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         }
 
         const parsedSplits = validSplits.map(s => {
-            const amount = parseFloat(s.amount.replace(',', '.'));
+            const evaluated = evaluateMath(s.amount);
+            const amount = parseFloat(evaluated.replace(',', '.'));
             if (isNaN(amount)) return null;
             const valueNum = Math.round(amount * 100);
             return {
@@ -222,9 +256,23 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                             {t('form.splitsHelp')}
                         </p>
 
-                        {splits.map((split, i) => (
-                            <div className="split-row" key={i}>
-                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                        {splits.map((split, i) => {
+                            const acc = accounts.find(a => a.guid === split.account_guid);
+                            let projectedBalanceStr = '';
+                            if (acc) {
+                                const original = initialSplitsMap[acc.guid] || 0;
+                                const totalCurrentForAcc = splits
+                                    .filter(s => s.account_guid === acc.guid)
+                                    .reduce((sum, s) => sum + (parseFloat(evaluateMath(s.amount).replace(',', '.')) || 0), 0);
+                                const projectedRaw = acc.balance - original + totalCurrentForAcc;
+                                const isCreditNormal = ['LIABILITY', 'CREDIT', 'INCOME', 'EQUITY'].includes(acc.account_type);
+                                const projectedSigned = isCreditNormal ? -projectedRaw : projectedRaw;
+                                projectedBalanceStr = formatCurrency(projectedSigned);
+                            }
+
+                            return (
+                                <div className="split-row" key={i}>
+                                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                                     <div style={{ flex: 1 }}>
                                         <AccountPicker
                                             accounts={accounts}
@@ -260,14 +308,22 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                         ↗
                                     </button>
                                 </div>
-                                <input
-                                    type="text"
-                                    className="form-input"
-                                    placeholder={t('form.value')}
-                                    value={split.amount}
-                                    onChange={e => updateSplit(i, 'amount', e.target.value)}
-                                    id={`split-value-${i}`}
-                                />
+                                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                                    <input
+                                        type="text"
+                                        className="form-input"
+                                        placeholder={t('form.value')}
+                                        value={split.amount}
+                                        onBlur={() => handleAmountBlur(i)}
+                                        onChange={e => updateSplit(i, 'amount', e.target.value)}
+                                        id={`split-value-${i}`}
+                                    />
+                                    {acc && (
+                                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textAlign: 'right', marginTop: 2, paddingRight: 4, whiteSpace: 'nowrap' }}>
+                                            {projectedBalanceStr}
+                                        </div>
+                                    )}
+                                </div>
                                 <input
                                     type="text"
                                     className="form-input"
@@ -286,7 +342,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                     ✕
                                 </button>
                             </div>
-                        ))}
+                        )})}
 
                         <button type="button" className="btn btn-secondary" onClick={addSplit} style={{ marginTop: 8 }}>
                             {t('form.addSplit')}

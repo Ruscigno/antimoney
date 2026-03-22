@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -534,6 +535,242 @@ func (s *TransactionService) GetAccountRegister(ctx context.Context, accountGUID
 	}
 
 	return entries, nil
+}
+
+// GetAccountRegisterPaged returns a paginated slice of register entries.
+// cursorDate is an ISO date string (YYYY-MM-DD). direction is "before", "after", or "around".
+// For "around", it returns entries centered on the given date.
+// For "before", returns entries before the cursor date (loading older).
+// For "after", returns entries after the cursor date (loading newer).
+func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accountGUID, cursorDate, direction string, limit int) (*models.RegisterPage, error) {
+	bookGUID := auth.BookGUIDFromCtx(ctx)
+
+	// Verify account belongs to user's book
+	var accountType models.AccountType
+	err := s.pool.QueryRow(ctx,
+		"SELECT account_type FROM accounts WHERE guid = $1 AND book_guid = $2",
+		accountGUID, bookGUID,
+	).Scan(&accountType)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+
+	// Count total entries
+	var totalCount int
+	err = s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM splits s JOIN transactions t ON s.tx_guid = t.guid
+		 WHERE s.account_guid = $1 AND t.book_guid = $2`, accountGUID, bookGUID,
+	).Scan(&totalCount)
+	if err != nil {
+		return nil, fmt.Errorf("count entries: %w", err)
+	}
+
+	// Parse cursor: try integer first
+	cursorOffset, offsetErr := strconv.Atoi(cursorDate)
+	isOffset := offsetErr == nil
+
+	// Determine offset and limit based on direction
+	var queryOffset, queryLimit int
+
+	switch direction {
+	case "before":
+		if isOffset {
+			queryOffset = cursorOffset - limit
+			queryLimit = limit
+			if queryOffset < 0 {
+				queryLimit = cursorOffset // only fetch what's left
+				queryOffset = 0
+			}
+		} else {
+			// fallback if it's somehow a date
+			parsedDate, _ := time.Parse("2006-01-02", cursorDate)
+			cursorTimestamp := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 11, 0, 0, 0, time.UTC)
+			var countBefore int
+			_ = s.pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM splits s JOIN transactions t ON s.tx_guid = t.guid
+				 WHERE s.account_guid = $1 AND t.book_guid = $2 AND t.post_date < $3`,
+				accountGUID, bookGUID, cursorTimestamp,
+			).Scan(&countBefore)
+			queryLimit = limit
+			queryOffset = countBefore - limit
+			if queryOffset < 0 {
+				queryLimit = countBefore
+				queryOffset = 0
+			}
+		}
+
+	case "after":
+		if isOffset {
+			queryOffset = cursorOffset + 1
+			queryLimit = limit
+		} else {
+			// fallback
+			parsedDate, _ := time.Parse("2006-01-02", cursorDate)
+			cursorTimestamp := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 11, 0, 0, 0, time.UTC)
+			var countUpTo int
+			_ = s.pool.QueryRow(ctx,
+				`SELECT COUNT(*) FROM splits s JOIN transactions t ON s.tx_guid = t.guid
+				 WHERE s.account_guid = $1 AND t.book_guid = $2 AND t.post_date <= $3`,
+				accountGUID, bookGUID, cursorTimestamp,
+			).Scan(&countUpTo)
+			queryOffset = countUpTo
+			queryLimit = limit
+		}
+
+	default: // "around"
+		parsedDate, err := time.Parse("2006-01-02", cursorDate)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cursor_date for around: %w", err)
+		}
+		cursorTimestamp := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 11, 0, 0, 0, time.UTC)
+		
+		var countBefore int
+		err = s.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM splits s JOIN transactions t ON s.tx_guid = t.guid
+			 WHERE s.account_guid = $1 AND t.book_guid = $2 AND t.post_date < $3`,
+			accountGUID, bookGUID, cursorTimestamp,
+		).Scan(&countBefore)
+		if err != nil {
+			return nil, fmt.Errorf("count before: %w", err)
+		}
+		
+		beforeCount := limit * 3 / 4
+		queryOffset = countBefore - beforeCount
+		if queryOffset < 0 {
+			queryOffset = 0
+		}
+		queryLimit = limit
+	}
+
+	if queryLimit <= 0 {
+		return &models.RegisterPage{
+			HasBefore:  queryOffset > 0,
+			HasAfter:   queryOffset < totalCount,
+			TotalCount: totalCount,
+		}, nil
+	}
+
+	// Compute running balance for all entries before our page
+	priorBalance := gnc.Zero()
+	if queryOffset > 0 {
+		rows, err := s.pool.Query(ctx,
+			`SELECT s.quantity_num, s.quantity_denom
+			 FROM splits s
+			 JOIN transactions t ON s.tx_guid = t.guid
+			 WHERE s.account_guid = $1 AND t.book_guid = $2
+			 ORDER BY t.post_date ASC, t.custom_id ASC, t.enter_date ASC
+			 LIMIT $3`,
+			accountGUID, bookGUID, queryOffset,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("compute prior balance: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var qtyNum, qtyDenom int64
+			if err := rows.Scan(&qtyNum, &qtyDenom); err != nil {
+				return nil, err
+			}
+			priorBalance = priorBalance.Add(gnc.New(qtyNum, qtyDenom))
+		}
+		rows.Close()
+	}
+
+	// Fetch the page of entries
+	pageRows, err := s.pool.Query(ctx,
+		`SELECT t.guid, t.custom_id, t.post_date, t.description,
+		        s.guid, s.value_num, s.value_denom, s.quantity_num, s.quantity_denom, s.memo, s.reconcile_state
+		 FROM splits s
+		 JOIN transactions t ON s.tx_guid = t.guid
+		 WHERE s.account_guid = $1 AND t.book_guid = $2
+		 ORDER BY t.post_date ASC, t.custom_id ASC, t.enter_date ASC
+		 LIMIT $3 OFFSET $4`,
+		accountGUID, bookGUID, queryLimit, queryOffset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query page: %w", err)
+	}
+	defer pageRows.Close()
+
+	var entries []models.RegisterEntry
+	runningBalance := priorBalance
+
+	for pageRows.Next() {
+		var (
+			txGUID         string
+			customID       string
+			postDate       time.Time
+			description    string
+			splitGUID      string
+			valueNum       int64
+			valueDenom     int64
+			qtyNum         int64
+			qtyDenom       int64
+			memo           string
+			reconcileState string
+		)
+		if err := pageRows.Scan(&txGUID, &customID, &postDate, &description,
+			&splitGUID, &valueNum, &valueDenom, &qtyNum, &qtyDenom, &memo, &reconcileState); err != nil {
+			return nil, err
+		}
+
+		amount := gnc.New(qtyNum, qtyDenom)
+		runningBalance = runningBalance.Add(amount)
+
+		entry := models.RegisterEntry{
+			TransactionGUID: txGUID,
+			CustomID:        customID,
+			PostDate:        postDate,
+			Description:     description,
+			Balance:         runningBalance.ToFloat64(),
+			SplitMemo:       memo,
+			SplitGUID:       splitGUID,
+			ReconcileState:  reconcileState,
+		}
+
+		f := amount.ToFloat64()
+		if accountType.IsDebitNormal() {
+			if f >= 0 {
+				entry.Deposit = &f
+			} else {
+				abs := -f
+				entry.Withdrawal = &abs
+			}
+		} else {
+			if f <= 0 {
+				abs := -f
+				entry.Deposit = &abs
+			} else {
+				entry.Withdrawal = &f
+			}
+		}
+
+		transferName, transferGUID, err := s.getTransferAccount(ctx, txGUID, accountGUID)
+		if err != nil {
+			return nil, err
+		}
+		entry.TransferAccount = transferName
+		entry.TransferAccountGUID = transferGUID
+
+		entries = append(entries, entry)
+	}
+
+	endOffset := queryOffset + len(entries) - 1
+	if len(entries) == 0 {
+		endOffset = queryOffset
+	}
+	return &models.RegisterPage{
+		Entries:     entries,
+		HasBefore:   queryOffset > 0,
+		HasAfter:    endOffset < totalCount-1,
+		FirstOffset: queryOffset,
+		LastOffset:  endOffset,
+		TotalCount:  totalCount,
+	}, nil
 }
 
 func (s *TransactionService) getTransferAccount(ctx context.Context, txGUID, excludeAccountGUID string) (string, string, error) {

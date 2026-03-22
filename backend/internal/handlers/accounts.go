@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/user/antimoney/internal/services"
@@ -110,7 +111,38 @@ func (h *AccountHandler) delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *AccountHandler) register(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	entries, err := h.txSvc.GetAccountRegister(r.Context(), id)
+
+	cursorDate := r.URL.Query().Get("cursor_date")
+	direction := r.URL.Query().Get("direction")
+	limitStr := r.URL.Query().Get("limit")
+
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	// If no cursor_date, fall back to loading everything (for backwards compat)
+	if cursorDate == "" {
+		entries, err := h.txSvc.GetAccountRegister(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, services.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "account not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, entries)
+		return
+	}
+
+	if direction == "" {
+		direction = "around"
+	}
+
+	result, err := h.txSvc.GetAccountRegisterPaged(r.Context(), id, cursorDate, direction, limit)
 	if err != nil {
 		if errors.Is(err, services.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "account not found")
@@ -119,7 +151,7 @@ func (h *AccountHandler) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, entries)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *AccountHandler) reconciledBalance(w http.ResponseWriter, r *http.Request) {
