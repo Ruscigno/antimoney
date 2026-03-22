@@ -28,6 +28,8 @@ export interface Account {
     metadata: Record<string, unknown>;
     version: number;
     balance: number;
+    reconciled_balance: number;
+    last_reconciled?: string;
     children?: Account[];
 }
 

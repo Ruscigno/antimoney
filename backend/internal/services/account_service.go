@@ -164,9 +164,12 @@ func (s *AccountService) ListAccountsTree(ctx context.Context) ([]models.Account
 		`SELECT a.guid, a.name, a.account_type, a.commodity_guid, a.commodity_scu,
 		        a.parent_guid, a.placeholder, a.description, a.metadata, a.version,
 		        a.created_at, a.updated_at,
-		        COALESCE(SUM(s.quantity_num::float / NULLIF(s.quantity_denom, 0)), 0) as balance
+		        COALESCE(SUM(s.quantity_num::float / NULLIF(s.quantity_denom, 0)), 0) as balance,
+		        COALESCE(SUM(CASE WHEN s.reconcile_state = 'y' THEN s.quantity_num::float / NULLIF(s.quantity_denom, 0) ELSE 0 END), 0) as reconciled_balance,
+		        MAX(CASE WHEN s.reconcile_state = 'y' THEN t.post_date ELSE NULL END) as last_reconciled
 		 FROM accounts a
 		 LEFT JOIN splits s ON a.guid = s.account_guid
+		 LEFT JOIN transactions t ON s.tx_guid = t.guid
 		 WHERE a.book_guid = $1
 		 GROUP BY a.guid
 		 ORDER BY a.account_type, a.name`, bookGUID,
@@ -181,7 +184,8 @@ func (s *AccountService) ListAccountsTree(ctx context.Context) ([]models.Account
 		var acc models.Account
 		if err := rows.Scan(&acc.GUID, &acc.Name, &acc.AccountType, &acc.CommodityGUID,
 			&acc.CommoditySCU, &acc.ParentGUID, &acc.Placeholder, &acc.Description,
-			&acc.Metadata, &acc.Version, &acc.CreatedAt, &acc.UpdatedAt, &acc.Balance); err != nil {
+			&acc.Metadata, &acc.Version, &acc.CreatedAt, &acc.UpdatedAt,
+			&acc.Balance, &acc.ReconciledBalance, &acc.LastReconciled); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, acc)

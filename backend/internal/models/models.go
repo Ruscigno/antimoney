@@ -66,8 +66,10 @@ type Account struct {
 	UpdatedAt     time.Time       `json:"updated_at"`
 
 	// Computed fields (not stored directly)
-	Children []*Account `json:"children,omitempty"`
-	Balance  float64    `json:"balance,omitempty"`
+	Children          []*Account `json:"children,omitempty"`
+	Balance           float64    `json:"balance,omitempty"`
+	ReconciledBalance float64    `json:"reconciled_balance"`
+	LastReconciled    *time.Time `json:"last_reconciled,omitempty"`
 }
 
 type Book struct {

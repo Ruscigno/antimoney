@@ -11,18 +11,33 @@ interface AccountFormProps {
     onSaved: () => void;
 }
 
-function flattenAccounts(accounts: Account[], depth = 0): { account: Account; depth: number }[] {
-    const result: { account: Account; depth: number }[] = [];
+function flattenAccounts(
+    accounts: Account[],
+    depth = 0,
+    parentPrefix = '',
+    _isLast = true,
+): { account: Account; depth: number; prefix: string }[] {
+    const result: { account: Account; depth: number; prefix: string }[] = [];
+    // Filter out ROOT accounts at this level
+    const visible = accounts.filter(a => a.account_type !== 'ROOT');
+    // But if a ROOT account has children, flatten them at same depth
     for (const a of accounts) {
         if (a.account_type === 'ROOT') {
             if (a.children) {
-                result.push(...flattenAccounts(a.children, depth));
+                result.push(...flattenAccounts(a.children, depth, parentPrefix, true));
             }
             continue;
         }
-        result.push({ account: a, depth });
-        if (a.children) {
-            result.push(...flattenAccounts(a.children, depth + 1));
+    }
+    for (let i = 0; i < visible.length; i++) {
+        const a = visible[i];
+        const last = i === visible.length - 1;
+        const connector = depth === 0 ? '' : (last ? '└── ' : '├── ');
+        const prefix = parentPrefix + connector;
+        result.push({ account: a, depth, prefix });
+        if (a.children && a.children.length > 0) {
+            const childPrefix = depth === 0 ? '' : parentPrefix + (last ? '    ' : '│   ');
+            result.push(...flattenAccounts(a.children, depth + 1, childPrefix, last));
         }
     }
     return result;
@@ -165,9 +180,9 @@ export default function AccountForm({ accounts, editingAccount, onClose, onSaved
                             <option value="">{t('accounts.topLevel')}</option>
                             {flatList
                                 .filter(f => editingAccount ? f.account.guid !== editingAccount.guid : true)
-                                .map(({ account: a, depth }) => (
+                                .map(({ account: a, prefix }) => (
                                     <option key={a.guid} value={a.guid}>
-                                        {'  '.repeat(depth)}{a.name}
+                                        {prefix}{a.name}
                                     </option>
                                 ))}
                         </select>

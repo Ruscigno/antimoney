@@ -20,6 +20,9 @@ const translations: Record<Locale, Record<string, string>> = {
         'dashboard.expenses': 'Expenses',
         'dashboard.netWorth': 'Net Worth',
         'dashboard.netWorthDesc': 'Assets − Liabilities',
+        'dashboard.total': 'Total',
+        'dashboard.reconciled': 'Reconciled',
+        'dashboard.balanceOverview': 'Balance Overview',
 
         // Accounts
         'accounts.title': 'Chart of Accounts',
@@ -40,6 +43,8 @@ const translations: Record<Locale, Record<string, string>> = {
         'accounts.create': 'Create Account',
         'accounts.cancel': 'Cancel',
         'accounts.nameRequired': 'Account name is required',
+        'accounts.lastReconciled': 'Last Reconciled',
+        'accounts.reconciledBalance': 'Reconciled',
 
         // Register
         'register.date': 'Date',
@@ -161,6 +166,9 @@ const translations: Record<Locale, Record<string, string>> = {
         'dashboard.expenses': 'Despesas',
         'dashboard.netWorth': 'Patrimônio Líquido',
         'dashboard.netWorthDesc': 'Ativos − Passivos',
+        'dashboard.total': 'Total',
+        'dashboard.reconciled': 'Reconciliado',
+        'dashboard.balanceOverview': 'Visão de Saldos',
         'accounts.title': 'Plano de Contas',
         'accounts.subtitle': 'Estrutura hierárquica de contas',
         'accounts.noAccounts': 'Nenhuma conta encontrada',
@@ -179,6 +187,8 @@ const translations: Record<Locale, Record<string, string>> = {
         'accounts.create': 'Criar Conta',
         'accounts.cancel': 'Cancelar',
         'accounts.nameRequired': 'Nome da conta é obrigatório',
+        'accounts.lastReconciled': 'Última Reconciliação',
+        'accounts.reconciledBalance': 'Reconciliado',
         'register.date': 'Data',
         'register.num': '#',
         'register.description': 'Descrição',

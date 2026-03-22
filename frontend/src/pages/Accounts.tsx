@@ -10,6 +10,7 @@ export default function Accounts() {
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+    const [showReconciled, setShowReconciled] = useState(false);
 
     const loadData = () => {
         setLoading(true);
@@ -52,9 +53,45 @@ export default function Accounts() {
                     <h1 className="page-title">{t('accounts.title')}</h1>
                     <p className="page-subtitle">{t('accounts.subtitle')}</p>
                 </div>
-                <button className="btn btn-primary" onClick={() => setShowForm(true)}>
-                    {t('accounts.newAccount')}
-                </button>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <div
+                        className="toggle-group"
+                        style={{
+                            display: 'inline-flex', borderRadius: 'var(--radius-sm)',
+                            border: '1px solid var(--border-color)', overflow: 'hidden',
+                        }}
+                    >
+                        <button
+                            className={`toggle-btn ${!showReconciled ? 'active' : ''}`}
+                            onClick={() => setShowReconciled(false)}
+                            style={{
+                                padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+                                border: 'none', cursor: 'pointer',
+                                background: !showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                                color: !showReconciled ? '#fff' : 'var(--text-secondary)',
+                                transition: 'all 0.15s',
+                            }}
+                        >
+                            {t('dashboard.total')}
+                        </button>
+                        <button
+                            className={`toggle-btn ${showReconciled ? 'active' : ''}`}
+                            onClick={() => setShowReconciled(true)}
+                            style={{
+                                padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+                                border: 'none', cursor: 'pointer',
+                                background: showReconciled ? 'var(--color-primary)' : 'var(--bg-tertiary)',
+                                color: showReconciled ? '#fff' : 'var(--text-secondary)',
+                                transition: 'all 0.15s',
+                            }}
+                        >
+                            {t('dashboard.reconciled')}
+                        </button>
+                    </div>
+                    <button className="btn btn-primary" onClick={() => setShowForm(true)}>
+                        {t('accounts.newAccount')}
+                    </button>
+                </div>
             </div>
 
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -62,6 +99,7 @@ export default function Accounts() {
                     accounts={accounts}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
+                    showReconciled={showReconciled}
                 />
             </div>
 
