@@ -1,4 +1,4 @@
-.PHONY: up down build run logs test-frontend test-backend test e2e convert-csv
+.PHONY: up down build run logs test-frontend test-backend test e2e convert-csv deploy
 
 up:
 	docker compose up -d
@@ -28,3 +28,6 @@ e2e:
 
 convert-csv:
 	cd scripts && node convert_csv.js
+
+deploy:
+	./deploy.sh

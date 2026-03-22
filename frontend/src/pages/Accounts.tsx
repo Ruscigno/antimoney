@@ -17,7 +17,10 @@ export default function Accounts() {
 
     const loadData = () => {
         setLoading(true);
-        getAccounts()
+        const now = new Date();
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+        
+        getAccounts(undefined, today)
             .then(setAccounts)
             .catch(console.error)
             .finally(() => setLoading(false));

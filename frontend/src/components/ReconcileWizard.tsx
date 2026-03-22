@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import type { RegisterEntry } from '../types';
+import type { RegisterEntry, AccountType } from '../types';
 import { t, formatCurrency, formatDate } from '../i18n';
 import { getAccountRegister, getReconciledBalance, batchReconcileSplits } from '../api/client';
 import { handleDateShortcut } from '../utils/date';
@@ -7,13 +7,14 @@ import { handleDateShortcut } from '../utils/date';
 interface ReconcileWizardProps {
     accountGuids: string[];
     accountName: string;
+    accountType?: AccountType;
     onClose: () => void;
     onFinished: () => void;
 }
 
 type Step = 'info' | 'select';
 
-export default function ReconcileWizard({ accountGuids, accountName, onClose, onFinished }: ReconcileWizardProps) {
+export default function ReconcileWizard({ accountGuids, accountName, accountType, onClose, onFinished }: ReconcileWizardProps) {
     const [step, setStep] = useState<Step>('info');
     const [statementDate, setStatementDate] = useState(() => new Date().toISOString().slice(0, 10));
     const [endingBalance, setEndingBalance] = useState('');
@@ -23,8 +24,35 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    // Load reconciled balances on mount
+    const isLiability = accountType === 'LIABILITY' || accountType === 'CREDIT';
+    const isCreditNormal = isLiability || accountType === 'INCOME' || accountType === 'EQUITY';
+
     const guidsKey = accountGuids.join(',');
+
+    // Suggest ending balance based on statement date
+    useEffect(() => {
+        if (!accountGuids.length) return;
+        Promise.all(accountGuids.map(id => getAccountRegister(id)))
+            .then(regs => {
+                const all = regs.flat();
+                all.sort((a, b) => new Date(a.post_date).getTime() - new Date(b.post_date).getTime());
+                
+                const cutoff = new Date(statementDate + 'T23:59:59Z');
+                let lastBalance = 0;
+                for (const entry of all) {
+                    if (new Date(entry.post_date) <= cutoff) {
+                        lastBalance = entry.balance;
+                    } else {
+                        break;
+                    }
+                }
+                const suggested = isCreditNormal ? -lastBalance : lastBalance;
+                setEndingBalance(suggested.toFixed(2));
+            })
+            .catch(console.error);
+    }, [guidsKey, statementDate, isCreditNormal]);
+
+    // Load reconciled balances on mount
     useEffect(() => {
         Promise.all(accountGuids.map(id => getReconciledBalance(id)))
             .then(data => {
@@ -77,24 +105,33 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
         setSelected(new Set());
     };
 
-    // Separate deposits and withdrawals
-    const deposits = useMemo(() => entries.filter(e => e.deposit != null), [entries]);
-    const withdrawals = useMemo(() => entries.filter(e => e.withdrawal != null), [entries]);
+    // Mapping for "Funds In" and "Funds Out"
+    // For Assets (Debit-Normal): In = deposit (income), Out = withdrawal (expense)
+    // For Liability (Credit-Normal): In = withdrawal (payback), Out = deposit (charge)
+    const leftEntries = useMemo(() => isCreditNormal ? entries.filter(e => e.withdrawal != null) : entries.filter(e => e.deposit != null), [entries, isCreditNormal]);
+    const rightEntries = useMemo(() => isCreditNormal ? entries.filter(e => e.deposit != null) : entries.filter(e => e.withdrawal != null), [entries, isCreditNormal]);
 
     // Calculate totals of selected items
-    const selectedDepositsTotal = useMemo(() =>
-        deposits.filter(e => selected.has(e.split_guid)).reduce((s, e) => s + (e.deposit || 0), 0),
-        [deposits, selected]
+    const leftTotal = useMemo(() =>
+        leftEntries.filter(e => selected.has(e.split_guid)).reduce((s, e) => s + (e.deposit || e.withdrawal || 0), 0),
+        [leftEntries, selected]
     );
 
-    const selectedWithdrawalsTotal = useMemo(() =>
-        withdrawals.filter(e => selected.has(e.split_guid)).reduce((s, e) => s + (e.withdrawal || 0), 0),
-        [withdrawals, selected]
+    const rightTotal = useMemo(() =>
+        rightEntries.filter(e => selected.has(e.split_guid)).reduce((s, e) => s + (e.deposit || e.withdrawal || 0), 0),
+        [rightEntries, selected]
     );
 
     const endingNum = parseFloat(endingBalance) || 0;
-    const reconciledBalance = startingBalance + selectedDepositsTotal - selectedWithdrawalsTotal;
-    const difference = endingNum - reconciledBalance;
+    
+    // Internal balance calculation: Both Asset and Liability work with startingBalance + In - Out
+    const internalReconciledBalance = startingBalance + leftTotal - rightTotal;
+    
+    // Display values adjust for credit-normal accounts
+    const displayStartingBalance = isCreditNormal ? -startingBalance : startingBalance;
+    const displayReconciledBalance = isCreditNormal ? -internalReconciledBalance : internalReconciledBalance;
+    const difference = endingNum - displayReconciledBalance;
+    
     const isBalanced = Math.abs(difference) < 0.005;
 
     const handleFinish = async () => {
@@ -139,7 +176,7 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
                             {t('reconcile.startingBalance')}
                         </label>
                         <div style={{ padding: '8px 12px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', fontSize: '0.9rem' }}>
-                            {formatCurrency(startingBalance)}
+                            {formatCurrency(displayStartingBalance)}
                         </div>
 
                         <label className="form-label" style={{ margin: 0, textAlign: 'right' }}>
@@ -214,7 +251,7 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flex: 1, overflow: 'hidden' }}>
-                    {/* Funds In */}
+                    {/* Funds In (Decreases debt for Liability) */}
                     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                         <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 8, color: 'var(--color-income)' }}>
                             {t('reconcile.fundsIn')}
@@ -230,16 +267,16 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {deposits.map(renderRow)}
+                                    {leftEntries.map(renderRow)}
                                 </tbody>
                             </table>
                         </div>
                         <div style={{ textAlign: 'right', padding: '8px 0', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-income)' }}>
-                            {t('reconcile.total')}: {formatCurrency(selectedDepositsTotal)}
+                            {t('reconcile.total')}: {formatCurrency(leftTotal)}
                         </div>
                     </div>
 
-                    {/* Funds Out */}
+                    {/* Funds Out (Increases debt for Liability) */}
                     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                         <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 8, color: 'var(--color-expense)' }}>
                             {t('reconcile.fundsOut')}
@@ -255,12 +292,12 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {withdrawals.map(renderRow)}
+                                    {rightEntries.map(renderRow)}
                                 </tbody>
                             </table>
                         </div>
                         <div style={{ textAlign: 'right', padding: '8px 0', fontSize: '0.85rem', fontWeight: 600, color: 'var(--color-expense)' }}>
-                            {t('reconcile.total')}: {formatCurrency(selectedWithdrawalsTotal)}
+                            {t('reconcile.total')}: {formatCurrency(rightTotal)}
                         </div>
                     </div>
                 </div>
@@ -276,14 +313,17 @@ export default function ReconcileWizard({ accountGuids, accountName, onClose, on
                     <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{t('reconcile.statementDate')}:</span>
                     <span>{statementDate}</span>
                     <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{t('reconcile.startingBalance')}:</span>
-                    <span>{formatCurrency(startingBalance)}</span>
+                    <span>{formatCurrency(displayStartingBalance)}</span>
                     <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{t('reconcile.endingBalance')}:</span>
                     <span>{formatCurrency(endingNum)}</span>
                     <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>{t('reconcile.reconciledBalance')}:</span>
-                    <span>{formatCurrency(reconciledBalance)}</span>
+                    <span>{formatCurrency(displayReconciledBalance)}</span>
                     <span style={{ color: 'var(--text-muted)', textAlign: 'right', fontWeight: 700 }}>{t('reconcile.difference')}:</span>
-                    <span style={{ fontWeight: 700, color: isBalanced ? 'var(--color-income)' : 'var(--color-expense)' }}>
-                        {formatCurrency(difference)}
+                    <span style={{ 
+                        fontWeight: 700, 
+                        color: isBalanced ? 'inherit' : 'var(--color-expense)' 
+                    }}>
+                        {isBalanced ? formatCurrency(0) : formatCurrency(difference)}
                     </span>
                 </div>
 

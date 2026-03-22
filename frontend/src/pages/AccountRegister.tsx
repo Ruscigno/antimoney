@@ -26,7 +26,14 @@ export default function AccountRegister() {
         Promise.all([getAccount(id), getAccountRegister(id)])
             .then(([acc, reg]) => {
                 setAccount(acc);
-                setEntries((reg || []).reverse());
+                const sorted = (reg || []).sort((a, b) => {
+                    if (a.post_date < b.post_date) return -1;
+                    if (a.post_date > b.post_date) return 1;
+                    const idA = a.custom_id || '';
+                    const idB = b.custom_id || '';
+                    return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
+                });
+                setEntries(sorted);
             })
             .catch(console.error)
             .finally(() => setLoading(false));
@@ -66,7 +73,13 @@ export default function AccountRegister() {
                 </div>
             </div>
 
-            <Register entries={entries} accountName={account.name} onReconcileChanged={loadData} onEditTransaction={setEditTxGuid} />
+            <Register
+                entries={entries}
+                accountName={account.name}
+                accountType={account.account_type}
+                onReconcileChanged={loadData}
+                onEditTransaction={setEditTxGuid}
+            />
 
             {(showForm || editTxGuid) && (
                 <TransactionForm
@@ -81,6 +94,7 @@ export default function AccountRegister() {
                 <ReconcileWizard
                     accountGuids={[account.guid]}
                     accountName={account.name}
+                    accountType={account.account_type}
                     onClose={() => setShowReconcile(false)}
                     onFinished={loadData}
                 />
