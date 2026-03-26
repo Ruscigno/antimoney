@@ -14,6 +14,7 @@ export default function Transactions() {
     const [loading, setLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [editTxGuid, setEditTxGuid] = useState<string | null>(null);
+    const [duplicateTxGuid, setDuplicateTxGuid] = useState<string | null>(null);
 
     // N shortcut opens new transaction form
     useShortcut('n', () => setShowForm(true), t('shortcuts.newTx'), undefined, []);
@@ -108,9 +109,14 @@ export default function Transactions() {
                                         </div>
                                     </td>
                                     <td>
-                                        <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); handleDelete(txn.guid); }} style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
-                                            {t('transactions.delete')}
-                                        </button>
+                                        <div style={{ display: 'flex', gap: 4 }}>
+                                            <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); setDuplicateTxGuid(txn.guid); }} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
+                                                {t('common.duplicate')}
+                                            </button>
+                                            <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); handleDelete(txn.guid); }} style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
+                                                {t('transactions.delete')}
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
@@ -119,11 +125,12 @@ export default function Transactions() {
                 </div>
             )}
 
-            {(showForm || editTxGuid) && (
+            {(showForm || editTxGuid || duplicateTxGuid) && (
                 <TransactionForm
-                    onClose={() => { setShowForm(false); setEditTxGuid(null); }}
+                    onClose={() => { setShowForm(false); setEditTxGuid(null); setDuplicateTxGuid(null); }}
                     onCreated={loadData}
                     editTxGuid={editTxGuid || undefined}
+                    duplicateTxGuid={duplicateTxGuid || undefined}
                 />
             )}
         </div>

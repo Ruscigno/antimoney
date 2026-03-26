@@ -25,6 +25,7 @@ export default function AccountRegister() {
     const [loadingMore, setLoadingMore] = useState(false);
     const [showForm, setShowForm] = useState(false);
     const [editTxGuid, setEditTxGuid] = useState<string | null>(null);
+    const [duplicateTxGuid, setDuplicateTxGuid] = useState<string | null>(null);
     const [showReconcile, setShowReconcile] = useState(false);
     const [hasBefore, setHasBefore] = useState(false);
     const [hasAfter, setHasAfter] = useState(false);
@@ -179,6 +180,7 @@ export default function AccountRegister() {
                 accountType={account.account_type}
                 onReconcileStateChanged={handleReconcileStateChanged}
                 onEditTransaction={setEditTxGuid}
+                onDuplicateTransaction={setDuplicateTxGuid}
                 onDeleteTransaction={handleDeleteTransaction}
                 hasBefore={hasBefore}
                 hasAfter={hasAfter}
@@ -186,12 +188,13 @@ export default function AccountRegister() {
                 loadingMore={loadingMore}
             />
 
-            {(showForm || editTxGuid) && (
+            {(showForm || editTxGuid || duplicateTxGuid) && (
                 <TransactionForm
-                    onClose={() => { setShowForm(false); setEditTxGuid(null); }}
+                    onClose={() => { setShowForm(false); setEditTxGuid(null); setDuplicateTxGuid(null); }}
                     onCreated={handleDataChanged}
                     defaultAccountGuid={account.guid}
                     editTxGuid={editTxGuid || undefined}
+                    duplicateTxGuid={duplicateTxGuid || undefined}
                 />
             )}
 

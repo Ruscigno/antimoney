@@ -10,6 +10,7 @@ interface RegisterProps {
     accountType?: AccountType;
     onReconcileStateChanged?: (splitGuid: string, newState: string) => void;
     onEditTransaction?: (guid: string) => void;
+    onDuplicateTransaction?: (guid: string) => void;
     onDeleteTransaction?: (guid: string) => void;
     hasBefore?: boolean;
     hasAfter?: boolean;
@@ -19,7 +20,7 @@ interface RegisterProps {
 
 export default function Register({
     entries, accountName, accountType,
-    onReconcileStateChanged, onEditTransaction, onDeleteTransaction,
+    onReconcileStateChanged, onEditTransaction, onDuplicateTransaction, onDeleteTransaction,
     hasBefore, hasAfter, onLoadMore, loadingMore,
 }: RegisterProps) {
     const navigate = useNavigate();
@@ -183,7 +184,7 @@ export default function Register({
                         <th style={{ textAlign: 'right' }}>{withdrawalLabel}</th>
                         <th style={{ textAlign: 'right' }}>{t('register.balance')}</th>
                         <th>{t('register.memo')}</th>
-                        <th style={{ width: 32 }}></th>
+                        <th style={{ width: 64 }}></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -274,23 +275,42 @@ export default function Register({
                                 </td>
                                 <td className="col-memo">{entry.split_memo}</td>
                                 <td style={{ textAlign: 'center' }}>
-                                    {onDeleteTransaction && (
-                                        <button
-                                            className="btn-delete-row"
-                                            onClick={handleDelete}
-                                            title={t('transactions.delete')}
-                                            style={{
-                                                background: 'none', border: 'none', cursor: 'pointer',
-                                                color: 'var(--color-expense)', opacity: 0.4,
-                                                fontSize: '0.9rem', transition: 'opacity 0.2s',
-                                                padding: '4px'
-                                            }}
-                                            onMouseEnter={e => { (e.target as HTMLButtonElement).style.opacity = '1'; }}
-                                            onMouseLeave={e => { (e.target as HTMLButtonElement).style.opacity = '0.4'; }}
-                                        >
-                                            🗑
-                                        </button>
-                                    )}
+                                    <div style={{ display: 'flex', justifyContent: 'center', gap: '4px' }}>
+                                        {onDuplicateTransaction && (
+                                            <button
+                                                className="btn-duplicate-row"
+                                                onClick={(e) => { e.stopPropagation(); onDuplicateTransaction(entry.transaction_guid); }}
+                                                title={t('common.duplicate')}
+                                                style={{
+                                                    background: 'none', border: 'none', cursor: 'pointer',
+                                                    color: 'var(--color-primary)', opacity: 0.7,
+                                                    fontSize: '1.2rem', transition: 'opacity 0.2s',
+                                                    padding: '2px 4px'
+                                                }}
+                                                onMouseEnter={e => { (e.target as HTMLButtonElement).style.opacity = '1'; }}
+                                                onMouseLeave={e => { (e.target as HTMLButtonElement).style.opacity = '0.7'; }}
+                                            >
+                                                ⎘
+                                            </button>
+                                        )}
+                                        {onDeleteTransaction && (
+                                            <button
+                                                className="btn-delete-row"
+                                                onClick={handleDelete}
+                                                title={t('transactions.delete')}
+                                                style={{
+                                                    background: 'none', border: 'none', cursor: 'pointer',
+                                                    color: 'var(--color-expense)', opacity: 0.4,
+                                                    fontSize: '0.9rem', transition: 'opacity 0.2s',
+                                                    padding: '4px'
+                                                }}
+                                                onMouseEnter={e => { (e.target as HTMLButtonElement).style.opacity = '1'; }}
+                                                onMouseLeave={e => { (e.target as HTMLButtonElement).style.opacity = '0.4'; }}
+                                            >
+                                                🗑
+                                            </button>
+                                        )}
+                                    </div>
                                 </td>
                             </tr>
                         );

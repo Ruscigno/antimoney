@@ -4,7 +4,7 @@ import type { Account } from '../types';
 import { handleDateShortcut } from '../utils/date';
 import { createTransaction, updateTransaction, getTransaction } from '../api/client';
 import { getAccounts } from '../api/client';
-import { t, formatCurrency } from '../i18n';
+import { t, formatCurrency, getLocale } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
 import AccountPicker from './AccountPicker';
 
@@ -15,6 +15,8 @@ interface TransactionFormProps {
     defaultAccountGuid?: string;
     /** If provided, we are editing this transaction */
     editTxGuid?: string;
+    /** If provided, we duplicate this transaction into a new one */
+    duplicateTxGuid?: string;
 }
 
 interface SplitInput {
@@ -23,7 +25,7 @@ interface SplitInput {
     memo: string;
 }
 
-export default function TransactionForm({ onClose, onCreated, defaultAccountGuid, editTxGuid }: TransactionFormProps) {
+export default function TransactionForm({ onClose, onCreated, defaultAccountGuid, editTxGuid, duplicateTxGuid }: TransactionFormProps) {
     const navigate = useNavigate();
     const [description, setDescription] = useState('');
     const [customId, setCustomId] = useState('');
@@ -52,18 +54,21 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
             setAccounts(accts.filter(a => !a.placeholder && a.account_type !== 'ROOT'));
         });
 
-        if (editTxGuid) {
+        if (editTxGuid || duplicateTxGuid) {
             setLoading(true);
-            getTransaction(editTxGuid).then((t) => {
+            getTransaction((editTxGuid || duplicateTxGuid) as string).then((t) => {
                 setDescription(t.description);
-                setCustomId(t.custom_id || '');
+                // Set customId for edit, clear for duplicate
+                setCustomId(editTxGuid ? (t.custom_id || '') : '');
                 setPostDate(t.post_date.split('T')[0]);
                 const initMap: Record<string, number> = {};
-                t.splits.forEach(s => {
-                    if (s.account_guid) {
-                        initMap[s.account_guid] = (initMap[s.account_guid] || 0) + (s.value_num / (s.value_denom || 1));
-                    }
-                });
+                if (editTxGuid) {
+                    t.splits.forEach(s => {
+                        if (s.account_guid) {
+                            initMap[s.account_guid] = (initMap[s.account_guid] || 0) + (s.value_num / (s.value_denom || 1));
+                        }
+                    });
+                }
                 setInitialSplitsMap(initMap);
 
                 setSplits(t.splits.map(s => ({
@@ -74,7 +79,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
             }).catch(e => setError(e.message))
                 .finally(() => setLoading(false));
         }
-    }, [editTxGuid]);
+    }, [editTxGuid, duplicateTxGuid]);
 
     // Auto-focus description field
     useEffect(() => {
@@ -208,14 +213,21 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         <div className="modal-overlay" onClick={onClose}>
             <div className="modal" onClick={e => e.stopPropagation()}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                    <h2 className="modal-title" style={{ margin: 0 }}>{editTxGuid ? t('form.editTransaction') : t('form.newTransaction')}</h2>
+                    <h2 className="modal-title" style={{ margin: 0 }}>{editTxGuid ? t('form.editTransaction') : duplicateTxGuid ? t('form.duplicateTransaction') : t('form.newTransaction')}</h2>
                     <kbd className="kbd-hint">Esc</kbd>
                 </div>
 
                 <form onSubmit={handleSubmit}>
                     <div className="form-row" style={{ gridTemplateColumns: '140px 100px 1fr' }}>
                         <div className="form-group">
-                            <label className="form-label">{t('form.date')}</label>
+                            <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                                <span>{t('form.date')}</span>
+                                {postDate && !isNaN(new Date(`${postDate}T12:00:00Z`).getTime()) && (
+                                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textTransform: 'capitalize', letterSpacing: 'normal', fontWeight: 'normal' }}>
+                                        {new Intl.DateTimeFormat(getLocale() === 'pt-BR' ? 'pt-BR' : 'en-US', { weekday: 'long' }).format(new Date(`${postDate}T12:00:00Z`))}
+                                    </span>
+                                )}
+                            </label>
                             <input
                                 type="date"
                                 className="form-input"

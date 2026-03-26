@@ -143,6 +143,7 @@ const translations: Record<Locale, Record<string, string>> = {
         // Transaction Form
         'form.newTransaction': 'New Transaction',
         'form.editTransaction': 'Edit Transaction',
+        'form.duplicateTransaction': 'Duplicate Transaction',
         'form.date': 'Date',
         'form.description': 'Description',
         'form.descriptionPlaceholder': 'e.g. Groceries',
@@ -171,6 +172,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'common.save': 'Save',
         'common.saving': 'Saving...',
         'common.newTransaction': '+ New Transaction',
+        'common.duplicate': 'Duplicate',
         'common.actions': 'Actions',
 
         // Account types
@@ -323,6 +325,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'commodities.confirmDelete': 'Excluir esta moeda? (Apenas se nenhuma conta a usar)',
         'form.newTransaction': 'Nova Transação',
         'form.editTransaction': 'Editar Transação',
+        'form.duplicateTransaction': 'Duplicar Transação',
         'form.date': 'Data',
         'form.description': 'Descrição',
         'form.descriptionPlaceholder': 'Ex: Supermercado',
@@ -347,6 +350,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'common.save': 'Salvar',
         'common.saving': 'Salvando...',
         'common.newTransaction': '+ Nova Transação',
+        'common.duplicate': 'Duplicar',
         'common.actions': 'Ações',
         'type.ROOT': 'Raiz',
         'type.ASSET': 'Ativo',
