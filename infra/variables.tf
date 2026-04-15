@@ -26,3 +26,15 @@ variable "db_name" {
   type        = string
   default     = "antimoney"
 }
+
+variable "redis_url" {
+  description = "Redis connection URL (e.g. rediss://... for TLS-enabled Upstash)"
+  type        = string
+  sensitive   = true
+}
+
+variable "cors_allowed_origins" {
+  description = "Comma-separated list of allowed CORS origins for the backend API"
+  type        = string
+  default     = "https://superestruturas.com"
+}

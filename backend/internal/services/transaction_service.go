@@ -21,6 +21,8 @@ var (
 	ErrVersionConflict       = errors.New("version conflict: record was modified by another user")
 	ErrNotFound              = errors.New("not found")
 	ErrPlaceholderAccount    = errors.New("cannot post splits to a placeholder account")
+	ErrInvalidSplit          = errors.New("invalid split: value_denom and quantity_denom must be non-zero")
+	ErrTooFewSplits          = errors.New("a transaction must have at least 2 splits")
 )
 
 // TransactionService handles the business logic for creating and managing transactions.
@@ -58,10 +60,14 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	validSplits := make([]CreateSplitRequest, 0, len(req.Splits))
 	var values []gnc.Numeric
 	for _, sp := range req.Splits {
-		if sp.ValueNum != 0 {
-			validSplits = append(validSplits, sp)
-			values = append(values, gnc.New(sp.ValueNum, sp.ValueDenom))
+		if sp.ValueNum == 0 {
+			continue // zero-value splits are silently dropped
 		}
+		if sp.ValueDenom == 0 || sp.QuantityDenom == 0 {
+			return nil, ErrInvalidSplit
+		}
+		validSplits = append(validSplits, sp)
+		values = append(values, gnc.New(sp.ValueNum, sp.ValueDenom))
 	}
 	req.Splits = validSplits
 
@@ -225,10 +231,14 @@ func (s *TransactionService) UpdateTransaction(ctx context.Context, txGUID strin
 	validSplits := make([]CreateSplitRequest, 0, len(req.Splits))
 	var values []gnc.Numeric
 	for _, sp := range req.Splits {
-		if sp.ValueNum != 0 {
-			validSplits = append(validSplits, sp)
-			values = append(values, gnc.New(sp.ValueNum, sp.ValueDenom))
+		if sp.ValueNum == 0 {
+			continue // zero-value splits are silently dropped
 		}
+		if sp.ValueDenom == 0 || sp.QuantityDenom == 0 {
+			return nil, ErrInvalidSplit
+		}
+		validSplits = append(validSplits, sp)
+		values = append(values, gnc.New(sp.ValueNum, sp.ValueDenom))
 	}
 	req.Splits = validSplits
 
@@ -238,7 +248,7 @@ func (s *TransactionService) UpdateTransaction(ctx context.Context, txGUID strin
 	}
 
 	if len(req.Splits) < 2 {
-		return nil, fmt.Errorf("a transaction must have at least 2 splits")
+		return nil, ErrTooFewSplits
 	}
 
 	postDate := normalizePostDate(req.PostDate)

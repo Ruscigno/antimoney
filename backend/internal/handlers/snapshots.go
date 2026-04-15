@@ -12,6 +12,22 @@ import (
 	"github.com/user/antimoney/internal/services"
 )
 
+// autoBackup attempts a snapshot before a destructive operation. Quota
+// exhaustion is logged but does NOT block the caller — auto-backups are
+// best-effort safety nets, not user-facing snapshots.
+func autoBackup(svc *services.SnapshotService, label string, r *http.Request) {
+	if svc == nil {
+		return
+	}
+	if _, err := svc.TakeSnapshot(r.Context(), label, models.SnapshotTriggerManual); err != nil {
+		if errors.Is(err, services.ErrSnapshotQuotaExceeded) {
+			log.Printf("auto-backup skipped (quota): %s", label)
+			return
+		}
+		log.Printf("auto-backup failed: %s: %v", label, err)
+	}
+}
+
 type SnapshotHandler struct {
 	svc  *services.SnapshotService
 	pool interface {
@@ -94,6 +110,10 @@ func (h *SnapshotHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 	ss, err := h.svc.TakeSnapshot(r.Context(), req.Label, models.SnapshotTriggerManual)
 	if err != nil {
+		if errors.Is(err, services.ErrSnapshotQuotaExceeded) {
+			writeError(w, http.StatusTooManyRequests, "manual snapshot quota reached (15 per 24 h), try again later")
+			return
+		}
 		log.Printf("snapshot create failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to take snapshot")
 		return
@@ -135,12 +155,8 @@ func (h *SnapshotHandler) handleRestore(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Take an instant snapshot before making any change
-	if _, err := h.svc.TakeSnapshot(r.Context(), "Auto-backup before restore", models.SnapshotTriggerManual); err != nil {
-		log.Printf("snapshot auto-backup failed: %v", err)
-		writeError(w, http.StatusInternalServerError, "failed to create auto-backup before restore")
-		return
-	}
+	// Best-effort snapshot before making any change (quota exhaustion is non-fatal).
+	autoBackup(h.svc, "Auto-backup before restore", r)
 
 	bookGUID := auth.BookGUIDFromCtx(r.Context())
 	if err := performImport(r.Context(), h.importExport.pool, bookGUID, data); err != nil {

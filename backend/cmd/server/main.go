@@ -19,6 +19,7 @@ import (
 	"github.com/user/antimoney/internal/config"
 	"github.com/user/antimoney/internal/database"
 	"github.com/user/antimoney/internal/handlers"
+	"github.com/user/antimoney/internal/ratelimit"
 	"github.com/user/antimoney/internal/scheduler"
 	"github.com/user/antimoney/internal/seed"
 	"github.com/user/antimoney/internal/services"
@@ -49,6 +50,12 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Initialize Redis rate limiter (fail-open if Redis is unavailable)
+	limiter, err := ratelimit.New(cfg.RedisURL)
+	if err != nil {
+		log.Printf("Warning: rate limiter disabled (invalid Redis URL): %v", err)
+	}
+
 	// Seed database (commodities + default chart of accounts for legacy book)
 	if err := seed.SeedDatabase(ctx, pool); err != nil {
 		log.Printf("Warning: seed: %v", err)
@@ -66,6 +73,12 @@ func main() {
 	importExportHandler := handlers.NewImportExportHandler(pool, txSvc, snapshotSvc)
 	snapshotHandler := handlers.NewSnapshotHandler(snapshotSvc, importExportHandler)
 
+	// Parse CORS allowed origins from config
+	corsOrigins := strings.Split(cfg.CORSAllowedOrigins, ",")
+	for i, o := range corsOrigins {
+		corsOrigins[i] = strings.TrimSpace(o)
+	}
+
 	// Setup router
 	r := chi.NewRouter()
 
@@ -76,13 +89,15 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
+		AllowedOrigins:   corsOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	r.Use(securityHeadersMiddleware)
+	r.Use(bodySizeLimitMiddleware(10 << 20)) // 10 MB
 
 	// Health check (public)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +108,11 @@ func main() {
 	// Auth routes (public)
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/register", func(w http.ResponseWriter, r *http.Request) {
+			if limiter != nil && !limiter.AllowRegistration(r.Context()) {
+				handlers.WriteErrorPublic(w, http.StatusTooManyRequests, "registration limit reached, try again tomorrow")
+				return
+			}
+
 			var req auth.RegisterRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				handlers.WriteErrorPublic(w, http.StatusBadRequest, "invalid request body")
@@ -113,7 +133,8 @@ func main() {
 					handlers.WriteErrorPublic(w, http.StatusConflict, "email already in use")
 					return
 				}
-				handlers.WriteErrorPublic(w, http.StatusInternalServerError, err.Error())
+				log.Printf("register error: %v", err)
+				handlers.WriteErrorPublic(w, http.StatusInternalServerError, "registration failed")
 				return
 			}
 
@@ -121,6 +142,11 @@ func main() {
 		})
 
 		r.Post("/login", func(w http.ResponseWriter, r *http.Request) {
+			if limiter != nil && !limiter.AllowLogin(r.Context(), r.RemoteAddr) {
+				handlers.WriteErrorPublic(w, http.StatusTooManyRequests, "too many login attempts, try again later")
+				return
+			}
+
 			var req auth.LoginRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				handlers.WriteErrorPublic(w, http.StatusBadRequest, "invalid request body")
@@ -133,7 +159,8 @@ func main() {
 					handlers.WriteErrorPublic(w, http.StatusUnauthorized, "invalid email or password")
 					return
 				}
-				handlers.WriteErrorPublic(w, http.StatusInternalServerError, err.Error())
+				log.Printf("login error: %v", err)
+				handlers.WriteErrorPublic(w, http.StatusInternalServerError, "login failed")
 				return
 			}
 			handlers.WriteJSONPublic(w, http.StatusOK, resp)
@@ -207,5 +234,29 @@ func main() {
 	log.Printf("🏦 Antimoney API server starting on %s", addr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
+	}
+}
+
+// securityHeadersMiddleware sets defensive HTTP headers on every response.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+		// Tight CSP: this service only serves JSON (API) and the health check.
+		// The React SPA is served separately (CDN/nginx) and needs its own CSP.
+		w.Header().Set("Content-Security-Policy", "default-src 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// bodySizeLimitMiddleware rejects request bodies larger than maxBytes.
+func bodySizeLimitMiddleware(maxBytes int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+			next.ServeHTTP(w, r)
+		})
 	}
 }

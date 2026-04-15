@@ -51,11 +51,10 @@ func (h *TransactionHandler) create(w http.ResponseWriter, r *http.Request) {
 
 	txn, err := h.svc.CreateTransaction(r.Context(), req)
 	if err != nil {
-		if errors.Is(err, services.ErrUnbalancedTransaction) {
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
-			return
-		}
-		if errors.Is(err, services.ErrPlaceholderAccount) {
+		if errors.Is(err, services.ErrUnbalancedTransaction) ||
+			errors.Is(err, services.ErrPlaceholderAccount) ||
+			errors.Is(err, services.ErrInvalidSplit) ||
+			errors.Is(err, services.ErrTooFewSplits) {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
@@ -94,11 +93,10 @@ func (h *TransactionHandler) update(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "transaction not found")
 			return
 		}
-		if errors.Is(err, services.ErrUnbalancedTransaction) {
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
-			return
-		}
-		if errors.Is(err, services.ErrPlaceholderAccount) {
+		if errors.Is(err, services.ErrUnbalancedTransaction) ||
+			errors.Is(err, services.ErrPlaceholderAccount) ||
+			errors.Is(err, services.ErrInvalidSplit) ||
+			errors.Is(err, services.ErrTooFewSplits) {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}

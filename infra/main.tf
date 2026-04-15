@@ -175,6 +175,14 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "JWT_SECRET"
         value = random_password.jwt_secret.result
       }
+      env {
+        name  = "REDIS_URL"
+        value = var.redis_url
+      }
+      env {
+        name  = "CORS_ALLOWED_ORIGINS"
+        value = var.cors_allowed_origins
+      }
     }
 
     # Connect Cloud Run to the default VPC so it can reach the DB VM's internal IP

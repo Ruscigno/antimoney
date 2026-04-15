@@ -15,6 +15,14 @@ import (
 
 var ErrSnapshotNotFound = errors.New("snapshot not found")
 var ErrSnapshotConfigNotFound = errors.New("snapshot config not found")
+var ErrSnapshotQuotaExceeded = errors.New("snapshot quota exceeded for this period")
+
+// Per-book, per-trigger quotas within any rolling 24-hour window.
+const (
+	quotaScheduled = 23 // hourly scheduler: 24th would already be next day
+	quotaActive    = 12 // 5-min active mode: rotate (delete oldest) at cap
+	quotaManual    = 15 // explicit user-initiated snapshots via the API
+)
 
 type SnapshotService struct {
 	pool *pgxpool.Pool
@@ -201,8 +209,73 @@ func (s *SnapshotService) TakeSnapshotForBook(ctx context.Context, bookGUID stri
 	return err
 }
 
+// enforceSnapshotQuota enforces per-trigger quotas for a book over the last 24 hours.
+// For SnapshotTriggerActive it rotates (deletes the oldest) instead of blocking.
+// Returns ErrSnapshotQuotaExceeded when a hard limit is reached.
+func enforceSnapshotQuota(ctx context.Context, pool *pgxpool.Pool, bookGUID string, trigger models.SnapshotTrigger) error {
+	switch trigger {
+	case models.SnapshotTriggerScheduled:
+		var count int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM snapshots
+			 WHERE book_guid = $1 AND trigger = 'scheduled'
+			   AND created_at > NOW() - INTERVAL '24 hours'`,
+			bookGUID,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("quota check: %w", err)
+		}
+		if count >= quotaScheduled {
+			return ErrSnapshotQuotaExceeded
+		}
+
+	case models.SnapshotTriggerActive:
+		var count int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM snapshots
+			 WHERE book_guid = $1 AND trigger = 'active'
+			   AND created_at > NOW() - INTERVAL '24 hours'`,
+			bookGUID,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("quota check: %w", err)
+		}
+		if count >= quotaActive {
+			// Rotate: delete the oldest active snapshot to make room.
+			if _, err := pool.Exec(ctx,
+				`DELETE FROM snapshots
+				 WHERE id = (
+				   SELECT id FROM snapshots
+				   WHERE book_guid = $1 AND trigger = 'active'
+				   ORDER BY created_at ASC LIMIT 1
+				 )`,
+				bookGUID,
+			); err != nil {
+				return fmt.Errorf("quota rotate: %w", err)
+			}
+		}
+
+	case models.SnapshotTriggerManual:
+		var count int
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM snapshots
+			 WHERE book_guid = $1 AND trigger = 'manual'
+			   AND created_at > NOW() - INTERVAL '24 hours'`,
+			bookGUID,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("quota check: %w", err)
+		}
+		if count >= quotaManual {
+			return ErrSnapshotQuotaExceeded
+		}
+	}
+	return nil
+}
+
 // takeSnapshotForBook is the internal implementation used by both TakeSnapshot and TakeSnapshotForBook.
 func takeSnapshotForBook(ctx context.Context, pool *pgxpool.Pool, bookGUID string, label string, trigger models.SnapshotTrigger) (*models.SnapshotSummary, error) {
+	if err := enforceSnapshotQuota(ctx, pool, bookGUID, trigger); err != nil {
+		return nil, err
+	}
+
 	// Build export payload by querying the same way as handleExport.
 	data, err := buildExportData(ctx, pool, bookGUID)
 	if err != nil {

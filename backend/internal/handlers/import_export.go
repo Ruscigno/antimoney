@@ -15,7 +15,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/user/antimoney/internal/auth"
-	"github.com/user/antimoney/internal/models"
 	"github.com/user/antimoney/internal/seed"
 	"github.com/user/antimoney/internal/services"
 )
@@ -584,13 +583,9 @@ func (h *ImportExportHandler) handleGnuCashImport(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Auto backup before overriding
+	// Best-effort snapshot before overriding (quota exhaustion is non-fatal).
 	if h.snapSvc != nil {
-		if _, err := h.snapSvc.TakeSnapshot(r.Context(), "Auto-backup before GnuCash import", models.SnapshotTriggerManual); err != nil {
-			log.Printf("snapshot auto-backup failed: %v", err)
-			writeError(w, http.StatusInternalServerError, "failed to create auto-backup before import")
-			return
-		}
+		autoBackup(h.snapSvc, "Auto-backup before GnuCash import", r)
 	}
 
 	if err := performImport(r.Context(), h.pool, bookGUID, *exportData); err != nil {
