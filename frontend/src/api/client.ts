@@ -2,28 +2,21 @@ import type { Account, Transaction, RegisterEntry, RegisterPage, CreateTransacti
 
 const API_BASE = '/api';
 
-function getToken(): string | null {
-    return localStorage.getItem('antimoney-token');
-}
-
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
-    const token = getToken();
     const headers: Record<string, string> = {
         'Content-Type': 'application/json',
         ...(options?.headers as Record<string, string> || {}),
     };
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
 
     const res = await fetch(`${API_BASE}${url}`, {
         ...options,
+        credentials: 'include', // send HttpOnly auth_token cookie automatically
         headers,
     });
 
     if (res.status === 401) {
-        // Token expired or invalid — force logout
-        localStorage.removeItem('antimoney-token');
+        // Session expired or revoked — clear cached user info and reload to login
+        localStorage.removeItem('antimoney-user');
         window.location.reload();
         throw new Error('Session expired');
     }

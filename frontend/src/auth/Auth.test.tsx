@@ -14,7 +14,6 @@ describe('Auth Pages', () => {
     it('renders login correctly', () => {
         const mockAuthContext = {
             user: null,
-            token: null,
             login: vi.fn(),
             register: vi.fn(),
             logout: vi.fn(),

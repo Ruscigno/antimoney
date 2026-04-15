@@ -37,9 +37,8 @@ export default function DataManagement() {
         setExporting(true);
         setMessage(null);
         try {
-            const token = localStorage.getItem('antimoney-token');
-            const res = await fetch('/api/data/export', {
-                headers: { 'Authorization': `Bearer ${token}` }
+                const res = await fetch('/api/data/export', {
+                credentials: 'include',
             });
             if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
             const data = await res.json();
@@ -72,14 +71,13 @@ export default function DataManagement() {
         setMessage(null);
 
         try {
-            const token = localStorage.getItem('antimoney-token');
             const formData = new FormData();
             formData.append('file', file);
 
             const res = await fetch('/api/data/import', {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
-                body: formData
+                credentials: 'include',
+                body: formData,
             });
 
             if (!res.ok) {
@@ -112,15 +110,14 @@ export default function DataManagement() {
         setMessage(null);
 
         try {
-            const token = localStorage.getItem('antimoney-token');
             const formData = new FormData();
             formData.append('file', file);
             formData.append('account_guid', selectedAccount);
 
             const res = await fetch('/api/data/import/csv', {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
-                body: formData
+                credentials: 'include',
+                body: formData,
             });
 
             if (!res.ok) {
@@ -150,14 +147,13 @@ export default function DataManagement() {
         setMessage(null);
 
         try {
-            const token = localStorage.getItem('antimoney-token');
             const formData = new FormData();
             formData.append('file', file);
 
             const res = await fetch('/api/data/import/gnucash', {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` },
-                body: formData
+                credentials: 'include',
+                body: formData,
             });
 
             if (!res.ok) {
@@ -183,10 +179,9 @@ export default function DataManagement() {
         setMessage(null);
 
         try {
-            const token = localStorage.getItem('antimoney-token');
             const res = await fetch('/api/data/reset', {
                 method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` }
+                credentials: 'include',
             });
 
             if (!res.ok) {

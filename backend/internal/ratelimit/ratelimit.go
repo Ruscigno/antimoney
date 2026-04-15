@@ -76,3 +76,30 @@ func (l *Limiter) AllowLogin(ctx context.Context, ip string) bool {
 	}
 	return count <= loginPerMinuteCap
 }
+
+// RevokeToken marks a JWT (identified by its jti claim) as revoked until ttl
+// elapses. Subsequent calls to IsTokenRevoked will return true for this jti.
+// Fails silently on Redis errors — the token remains usable in that case.
+func (l *Limiter) RevokeToken(ctx context.Context, jti string, ttl time.Duration) {
+	if l == nil || jti == "" || ttl <= 0 {
+		return
+	}
+	key := fmt.Sprintf("jti:revoked:%s", jti)
+	if err := l.rdb.Set(ctx, key, "1", ttl).Err(); err != nil {
+		log.Printf("ratelimit: redis error revoking token jti=%s: %v", jti, err)
+	}
+}
+
+// IsTokenRevoked returns true if the given jti has been explicitly revoked.
+// Fails open (returns false) on Redis errors so an outage never locks users out.
+func (l *Limiter) IsTokenRevoked(ctx context.Context, jti string) bool {
+	if l == nil || jti == "" {
+		return false
+	}
+	exists, err := l.rdb.Exists(ctx, fmt.Sprintf("jti:revoked:%s", jti)).Result()
+	if err != nil {
+		log.Printf("ratelimit: redis error checking revocation jti=%s: %v", jti, err)
+		return false // fail open
+	}
+	return exists > 0
+}

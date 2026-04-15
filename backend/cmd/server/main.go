@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -28,6 +29,7 @@ import (
 func main() {
 	cfg := config.Load()
 	ctx := context.Background()
+	isProduction := cfg.Environment == "production"
 
 	// Initialize JWT secret
 	auth.SetJWTSecret(cfg.JWTSecret)
@@ -54,6 +56,11 @@ func main() {
 	limiter, err := ratelimit.New(cfg.RedisURL)
 	if err != nil {
 		log.Printf("Warning: rate limiter disabled (invalid Redis URL): %v", err)
+	}
+
+	// Wire JTI revocation checker into auth middleware
+	if limiter != nil {
+		auth.IsTokenRevoked = limiter.IsTokenRevoked
 	}
 
 	// Seed database (commodities + default chart of accounts for legacy book)
@@ -96,7 +103,7 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
-	r.Use(securityHeadersMiddleware)
+	r.Use(securityHeadersMiddleware(isProduction))
 	r.Use(bodySizeLimitMiddleware(10 << 20)) // 10 MB
 
 	// Health check (public)
@@ -122,8 +129,8 @@ func main() {
 				handlers.WriteErrorPublic(w, http.StatusBadRequest, "email and password are required")
 				return
 			}
-			if len(req.Password) < 6 {
-				handlers.WriteErrorPublic(w, http.StatusBadRequest, "password must be at least 6 characters")
+			if err := validatePassword(req.Password); err != nil {
+				handlers.WriteErrorPublic(w, http.StatusBadRequest, err.Error())
 				return
 			}
 
@@ -138,6 +145,7 @@ func main() {
 				return
 			}
 
+			auth.SetAuthCookie(w, resp.Token, isProduction)
 			handlers.WriteJSONPublic(w, http.StatusCreated, resp)
 		})
 
@@ -163,22 +171,43 @@ func main() {
 				handlers.WriteErrorPublic(w, http.StatusInternalServerError, "login failed")
 				return
 			}
+
+			auth.SetAuthCookie(w, resp.Token, isProduction)
 			handlers.WriteJSONPublic(w, http.StatusOK, resp)
 		})
 
 		r.Get("/me", func(w http.ResponseWriter, r *http.Request) {
-			// Quick token validation endpoint
-			tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			tokenStr := auth.TokenFromRequest(r)
 			claims, err := auth.ParseToken(tokenStr)
 			if err != nil {
 				handlers.WriteErrorPublic(w, http.StatusUnauthorized, "invalid token")
+				return
+			}
+			// Check revocation (honours logout)
+			if auth.IsTokenRevoked != nil && auth.IsTokenRevoked(r.Context(), claims.JTI) {
+				handlers.WriteErrorPublic(w, http.StatusUnauthorized, "token has been revoked")
 				return
 			}
 			handlers.WriteJSONPublic(w, http.StatusOK, map[string]string{
 				"user_id":   claims.UserID,
 				"book_guid": claims.BookGUID,
 				"email":     claims.Email,
+				"name":      claims.Name,
 			})
+		})
+
+		r.Post("/logout", func(w http.ResponseWriter, r *http.Request) {
+			tokenStr := auth.TokenFromRequest(r)
+			if tokenStr != "" {
+				if claims, err := auth.ParseToken(tokenStr); err == nil && limiter != nil {
+					ttl := time.Until(claims.ExpiresAt.Time)
+					if ttl > 0 {
+						limiter.RevokeToken(r.Context(), claims.JTI, ttl)
+					}
+				}
+			}
+			auth.ClearAuthCookie(w, isProduction)
+			w.WriteHeader(http.StatusNoContent)
 		})
 	})
 
@@ -237,18 +266,55 @@ func main() {
 	}
 }
 
+// validatePassword enforces the password policy:
+// at least 8 characters, one uppercase, one lowercase, one digit.
+func validatePassword(pw string) error {
+	if len(pw) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	var hasUpper, hasLower, hasDigit bool
+	for _, c := range pw {
+		switch {
+		case unicode.IsUpper(c):
+			hasUpper = true
+		case unicode.IsLower(c):
+			hasLower = true
+		case unicode.IsDigit(c):
+			hasDigit = true
+		}
+	}
+	if !hasUpper {
+		return fmt.Errorf("password must contain at least one uppercase letter")
+	}
+	if !hasLower {
+		return fmt.Errorf("password must contain at least one lowercase letter")
+	}
+	if !hasDigit {
+		return fmt.Errorf("password must contain at least one number")
+	}
+	return nil
+}
+
 // securityHeadersMiddleware sets defensive HTTP headers on every response.
-func securityHeadersMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
-		// Tight CSP: this service only serves JSON (API) and the health check.
-		// The React SPA is served separately (CDN/nginx) and needs its own CSP.
-		w.Header().Set("Content-Security-Policy", "default-src 'none'")
-		next.ServeHTTP(w, r)
-	})
+// In production it also adds HSTS so the app itself enforces HTTPS even if
+// accessed directly (bypassing the Cloudflare edge).
+func securityHeadersMiddleware(isProduction bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isProduction {
+				// 2 years; includeSubDomains covers any future sub-domains
+				w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			}
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("X-Frame-Options", "DENY")
+			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+			// Tight CSP: this service only serves JSON (API) and the health check.
+			// The React SPA is served separately (CDN/nginx) and needs its own CSP.
+			w.Header().Set("Content-Security-Policy", "default-src 'none'")
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // bodySizeLimitMiddleware rejects request bodies larger than maxBytes.
