@@ -93,7 +93,7 @@ export default function LoginPage() {
                             onChange={e => setPassword(e.target.value)}
                             placeholder="••••••••"
                             required
-                            minLength={8}
+                            minLength={mode === 'register' ? 8 : undefined}
                         />
                     </div>
 
