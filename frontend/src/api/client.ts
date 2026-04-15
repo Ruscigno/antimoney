@@ -1,4 +1,4 @@
-import type { Account, Transaction, RegisterEntry, RegisterPage, CreateTransactionRequest } from '../types';
+import type { Account, Transaction, RegisterEntry, RegisterPage, CreateTransactionRequest, SnapshotConfig, SnapshotSummary } from '../types';
 
 const API_BASE = '/api';
 
@@ -118,4 +118,29 @@ export const reconcileAccountSplits = (accountId: string, accountGuids: string[]
         method: 'POST',
         body: JSON.stringify({ account_guids: accountGuids }),
     });
+
+// Snapshots
+export const getSnapshotConfig = () =>
+    fetchJSON<SnapshotConfig>('/snapshots/config');
+
+export const upsertSnapshotConfig = (data: { frequency_hours: number; ttl_hours: number; active_mode: boolean }) =>
+    fetchJSON<SnapshotConfig>('/snapshots/config', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+
+export const listSnapshots = () =>
+    fetchJSON<SnapshotSummary[]>('/snapshots/');
+
+export const takeSnapshot = (label: string) =>
+    fetchJSON<SnapshotSummary>('/snapshots/', {
+        method: 'POST',
+        body: JSON.stringify({ label }),
+    });
+
+export const restoreSnapshot = (id: string) =>
+    fetchJSON<{ message: string }>(`/snapshots/${id}/restore`, { method: 'POST' });
+
+export const deleteSnapshot = (id: string) =>
+    fetchJSON<void>(`/snapshots/${id}`, { method: 'DELETE' });
 

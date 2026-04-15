@@ -19,6 +19,7 @@ import (
 	"github.com/user/antimoney/internal/config"
 	"github.com/user/antimoney/internal/database"
 	"github.com/user/antimoney/internal/handlers"
+	"github.com/user/antimoney/internal/scheduler"
 	"github.com/user/antimoney/internal/seed"
 	"github.com/user/antimoney/internal/services"
 )
@@ -57,11 +58,13 @@ func main() {
 	txSvc := services.NewTransactionService(pool)
 	acctSvc := services.NewAccountService(pool)
 	userSvc := auth.NewUserService(pool)
+	snapshotSvc := services.NewSnapshotService(pool)
 
 	// Create handlers
 	txHandler := handlers.NewTransactionHandler(txSvc)
 	acctHandler := handlers.NewAccountHandler(acctSvc, txSvc)
 	importExportHandler := handlers.NewImportExportHandler(pool, txSvc)
+	snapshotHandler := handlers.NewSnapshotHandler(snapshotSvc, importExportHandler)
 
 	// Setup router
 	r := chi.NewRouter()
@@ -159,6 +162,7 @@ func main() {
 		r.Mount("/transactions", txHandler.Routes())
 		r.Mount("/accounts", acctHandler.Routes())
 		r.Mount("/data", importExportHandler.Routes())
+		r.Mount("/snapshots", snapshotHandler.Routes())
 
 		// Books endpoint (user's book)
 		r.Get("/books", func(w http.ResponseWriter, r *http.Request) {
@@ -196,6 +200,9 @@ func main() {
 		defer cancel()
 		srv.Shutdown(shutdownCtx)
 	}()
+
+	// Start background snapshot scheduler.
+	go scheduler.StartSnapshotScheduler(ctx, snapshotSvc)
 
 	log.Printf("🏦 Antimoney API server starting on %s", addr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {

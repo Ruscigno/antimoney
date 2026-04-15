@@ -34,6 +34,10 @@ export default function Sidebar({ onLogout, userEmail }: SidebarProps) {
                     {t('nav.data')}
                     <kbd className="kbd-nav">⌥4</kbd>
                 </NavLink>
+                <NavLink to="/snapshots" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <span className="nav-item-icon">📸</span>
+                    {t('nav.snapshots')}
+                </NavLink>
             </nav>
 
             {userEmail && (

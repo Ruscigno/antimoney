@@ -5,6 +5,7 @@ import Accounts from './pages/Accounts';
 import AccountRegister from './pages/AccountRegister';
 import Transactions from './pages/Transactions';
 import DataManagement from './pages/DataManagement';
+import Snapshots from './pages/Snapshots';
 import LoginPage from './pages/LoginPage';
 import { useGlobalShortcuts } from './hooks/useShortcuts';
 import { initLocale } from './i18n';
@@ -39,6 +40,7 @@ function AppContent() {
                     <Route path="/accounts/:id" element={<AccountRegister />} />
                     <Route path="/transactions" element={<Transactions />} />
                     <Route path="/data" element={<DataManagement />} />
+                    <Route path="/snapshots" element={<Snapshots />} />
                     {/* Fallback route — redirect to dashboard for unknown routes (like /login when already logged in) */}
                     <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

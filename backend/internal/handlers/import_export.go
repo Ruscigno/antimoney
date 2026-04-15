@@ -2,9 +2,14 @@ package handlers
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -12,10 +17,6 @@ import (
 	"github.com/user/antimoney/internal/auth"
 	"github.com/user/antimoney/internal/seed"
 	"github.com/user/antimoney/internal/services"
-	"encoding/csv"
-	"strconv"
-	"strings"
-	"time"
 )
 
 type ImportExportHandler struct {
@@ -69,32 +70,9 @@ type ExportSplit struct {
 	ReconcileState string `json:"reconcile_state"`
 }
 
-func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Request) {
-	err := r.ParseMultipartForm(10 << 20)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
-		return
-	}
-
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "file is required")
-		return
-	}
-	defer file.Close()
-
-	var data ExportData
-	if err := json.NewDecoder(file).Decode(&data); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json format")
-		return
-	}
-
-	bookGUID := auth.BookGUIDFromCtx(r.Context())
-	if bookGUID == "" {
-		writeError(w, http.StatusUnauthorized, "missing book guid")
-		return
-	}
-
+// performImport replaces all book data with the provided ExportData.
+// It is shared by both the file-upload import handler and the snapshot restore handler.
+func performImport(ctx context.Context, pool *pgxpool.Pool, bookGUID string, data ExportData) error {
 	// Ensure a ROOT account exists. If not, create one and wrap top-level accounts inside it.
 	hasRoot := false
 	for _, acc := range data.Accounts {
@@ -123,7 +101,7 @@ func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Reques
 		data.Accounts = append([]ExportAccount{rootAcc}, data.Accounts...)
 	}
 
-	// Map old GUIDs to new GUIDs to prevent primary key collisions when sharing files
+	// Map old GUIDs to new GUIDs to prevent primary key collisions when sharing files.
 	accountMap := make(map[string]string)
 	for i, acc := range data.Accounts {
 		newGUID := uuid.New().String()
@@ -148,103 +126,116 @@ func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	tx, err := h.pool.Begin(r.Context())
+	tx, err := pool.Begin(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start transaction")
-		return
+		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback(r.Context())
+	defer tx.Rollback(ctx)
 
-	// Secure deletion: only deletes records associated with the user's book
-	// Clear book root first to avoid FK constraint
-	_, err = tx.Exec(r.Context(), "UPDATE books SET root_account_guid = NULL WHERE guid = $1", bookGUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clear book root")
-		return
+	// Secure deletion: only deletes records associated with the user's book.
+	// Clear book root first to avoid FK constraint.
+	if _, err = tx.Exec(ctx, "UPDATE books SET root_account_guid = NULL WHERE guid = $1", bookGUID); err != nil {
+		return fmt.Errorf("failed to clear book root: %w", err)
 	}
-
-	_, err = tx.Exec(r.Context(), "DELETE FROM splits WHERE tx_guid IN (SELECT guid FROM transactions WHERE book_guid = $1)", bookGUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clean up splits")
-		return
+	if _, err = tx.Exec(ctx, "DELETE FROM splits WHERE tx_guid IN (SELECT guid FROM transactions WHERE book_guid = $1)", bookGUID); err != nil {
+		return fmt.Errorf("failed to clean up splits: %w", err)
 	}
-	_, err = tx.Exec(r.Context(), "DELETE FROM transactions WHERE book_guid = $1", bookGUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clean up transactions")
-		return
+	if _, err = tx.Exec(ctx, "DELETE FROM transactions WHERE book_guid = $1", bookGUID); err != nil {
+		return fmt.Errorf("failed to clean up transactions: %w", err)
 	}
-	_, err = tx.Exec(r.Context(), "DELETE FROM accounts WHERE book_guid = $1", bookGUID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clean up accounts")
-		return
+	if _, err = tx.Exec(ctx, "DELETE FROM accounts WHERE book_guid = $1", bookGUID); err != nil {
+		return fmt.Errorf("failed to clean up accounts: %w", err)
 	}
 
 	var rootAccountGUID string
-	// Pass 1: Insert accounts without parent_guid to avoid FK issues
+	// Pass 1: Insert accounts without parent_guid to avoid FK issues.
 	for _, acc := range data.Accounts {
 		if acc.AccountType == "ROOT" {
 			rootAccountGUID = acc.GUID
 		}
-		_, err = tx.Exec(r.Context(),
+		if _, err = tx.Exec(ctx,
 			`INSERT INTO accounts (guid, name, account_type, parent_guid, book_guid, placeholder, description)
 			 VALUES ($1, $2, $3, NULL, $4, $5, $6)`,
-			acc.GUID, acc.Name, acc.AccountType, bookGUID, acc.Placeholder, acc.Description)
-		if err != nil {
+			acc.GUID, acc.Name, acc.AccountType, bookGUID, acc.Placeholder, acc.Description); err != nil {
 			log.Printf("Error inserting account (pass 1): %v", err)
-			writeError(w, http.StatusInternalServerError, "failed to insert account")
-			return
+			return fmt.Errorf("failed to insert account: %w", err)
 		}
 	}
 
-	// Pass 2: Update accounts with their parent_guid
+	// Pass 2: Update accounts with their parent_guid.
 	for _, acc := range data.Accounts {
 		if acc.ParentGUID != nil {
-			_, err = tx.Exec(r.Context(),
+			if _, err = tx.Exec(ctx,
 				`UPDATE accounts SET parent_guid = $1 WHERE guid = $2 AND book_guid = $3`,
-				acc.ParentGUID, acc.GUID, bookGUID)
-			if err != nil {
+				acc.ParentGUID, acc.GUID, bookGUID); err != nil {
 				log.Printf("Error updating account parent (pass 2): %v", err)
-				writeError(w, http.StatusInternalServerError, "failed to update account hierarchy")
-				return
+				return fmt.Errorf("failed to update account hierarchy: %w", err)
 			}
 		}
 	}
 
 	if rootAccountGUID != "" {
-		_, err = tx.Exec(r.Context(), "UPDATE books SET root_account_guid = $1 WHERE guid = $2", rootAccountGUID, bookGUID)
-		if err != nil {
+		if _, err = tx.Exec(ctx, "UPDATE books SET root_account_guid = $1 WHERE guid = $2", rootAccountGUID, bookGUID); err != nil {
 			log.Printf("Error updating book root: %v", err)
-			writeError(w, http.StatusInternalServerError, "failed to restore book root")
-			return
+			return fmt.Errorf("failed to restore book root: %w", err)
 		}
 	}
 
 	for _, t := range data.Transactions {
-		_, err = tx.Exec(r.Context(),
+		if _, err = tx.Exec(ctx,
 			`INSERT INTO transactions (guid, book_guid, post_date, enter_date, description)
 			 VALUES ($1, $2, $3, $4, $5)`,
-			t.GUID, bookGUID, t.PostDate, t.EnterDate, t.Description)
-		if err != nil {
+			t.GUID, bookGUID, t.PostDate, t.EnterDate, t.Description); err != nil {
 			log.Printf("Error inserting transaction: %v", err)
-			writeError(w, http.StatusInternalServerError, "failed to insert transaction")
-			return
+			return fmt.Errorf("failed to insert transaction: %w", err)
 		}
 
 		for _, s := range t.Splits {
-			_, err = tx.Exec(r.Context(),
+			if _, err = tx.Exec(ctx,
 				`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom, quantity_num, quantity_denom, reconcile_state)
 				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				s.GUID, t.GUID, s.AccountGUID, s.Memo, s.ValueNum, s.ValueDenom, s.QuantityNum, s.QuantityDenom, s.ReconcileState)
-			if err != nil {
+				s.GUID, t.GUID, s.AccountGUID, s.Memo, s.ValueNum, s.ValueDenom, s.QuantityNum, s.QuantityDenom, s.ReconcileState); err != nil {
 				log.Printf("Error inserting split: %v", err)
-				writeError(w, http.StatusInternalServerError, "failed to insert split")
-				return
+				return fmt.Errorf("failed to insert split: %w", err)
 			}
 		}
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to commit transaction")
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseMultipartForm(10 << 20)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	var data ExportData
+	if err := json.NewDecoder(file).Decode(&data); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json format")
+		return
+	}
+
+	bookGUID := auth.BookGUIDFromCtx(r.Context())
+	if bookGUID == "" {
+		writeError(w, http.StatusUnauthorized, "missing book guid")
+		return
+	}
+
+	if err := performImport(r.Context(), h.pool, bookGUID, data); err != nil {
+		log.Printf("Import failed: %v", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

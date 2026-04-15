@@ -5,6 +5,42 @@ import (
 	"time"
 )
 
+// SnapshotTrigger describes what caused a snapshot to be taken.
+type SnapshotTrigger string
+
+const (
+	SnapshotTriggerManual    SnapshotTrigger = "manual"
+	SnapshotTriggerScheduled SnapshotTrigger = "scheduled"
+	SnapshotTriggerActive    SnapshotTrigger = "active"
+)
+
+// SnapshotConfig holds a book's snapshot scheduling preferences.
+// There is at most one row per book (enforced by DB UNIQUE constraint).
+type SnapshotConfig struct {
+	ID             string    `json:"id"`
+	BookGUID       string    `json:"book_guid"`
+	FrequencyHours int       `json:"frequency_hours"` // 0 = disabled
+	TTLHours       int       `json:"ttl_hours"`        // 0 = keep forever
+	ActiveMode     bool      `json:"active_mode"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// SnapshotSummary is used in list responses — the data blob is excluded to save bandwidth.
+type SnapshotSummary struct {
+	ID        string          `json:"id"`
+	BookGUID  string          `json:"book_guid"`
+	Label     string          `json:"label"`
+	Trigger   SnapshotTrigger `json:"trigger"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// Snapshot is the full representation including the data payload.
+type Snapshot struct {
+	SnapshotSummary
+	Data json.RawMessage `json:"data,omitempty"`
+}
+
 // AccountType represents the type of account in the chart of accounts.
 type AccountType string
 

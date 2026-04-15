@@ -100,6 +100,26 @@ export const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
     EQUITY: 'Equity',
 };
 
+export type SnapshotTrigger = 'manual' | 'scheduled' | 'active';
+
+export interface SnapshotConfig {
+    id: string;
+    book_guid: string;
+    frequency_hours: number;
+    ttl_hours: number;
+    active_mode: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface SnapshotSummary {
+    id: string;
+    book_guid: string;
+    label: string;
+    trigger: SnapshotTrigger;
+    created_at: string;
+}
+
 export const ACCOUNT_TYPE_COLORS: Record<AccountType, string> = {
     ROOT: '#64748b',
     ASSET: '#22c55e',
