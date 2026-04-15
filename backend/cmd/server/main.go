@@ -63,7 +63,7 @@ func main() {
 	// Create handlers
 	txHandler := handlers.NewTransactionHandler(txSvc)
 	acctHandler := handlers.NewAccountHandler(acctSvc, txSvc)
-	importExportHandler := handlers.NewImportExportHandler(pool, txSvc)
+	importExportHandler := handlers.NewImportExportHandler(pool, txSvc, snapshotSvc)
 	snapshotHandler := handlers.NewSnapshotHandler(snapshotSvc, importExportHandler)
 
 	// Setup router

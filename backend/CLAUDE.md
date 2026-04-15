@@ -17,6 +17,7 @@ DATABASE_URL="postgres://antimoney:antimoney_dev@localhost:5432/antimoney?sslmod
 - `internal/handlers/` — thin HTTP handlers: parse → call service → write JSON
 - `internal/services/` — all business logic (`TransactionService`, `AccountService`)
 - `internal/models/` — domain structs (`Account`, `Transaction`, `Split`, `User`)
+- `pages/` — routed page components (Dashboard, Accounts, AccountRegister, Transactions, DataManagement [JSON/CSV/GnuCash import], LoginPage)
 - `internal/gnc/` — rational number engine
 - `internal/auth/` — JWT middleware; injects `BookGUID` and `UserID` into context
 - `internal/seed/` — seeds currencies and a default chart-of-accounts on startup

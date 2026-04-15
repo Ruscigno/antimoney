@@ -15,23 +15,26 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/user/antimoney/internal/auth"
+	"github.com/user/antimoney/internal/models"
 	"github.com/user/antimoney/internal/seed"
 	"github.com/user/antimoney/internal/services"
 )
 
 type ImportExportHandler struct {
-	pool *pgxpool.Pool
-	txSvc *services.TransactionService
+	pool    *pgxpool.Pool
+	txSvc   *services.TransactionService
+	snapSvc *services.SnapshotService
 }
 
-func NewImportExportHandler(pool *pgxpool.Pool, txSvc *services.TransactionService) *ImportExportHandler {
-	return &ImportExportHandler{pool: pool, txSvc: txSvc}
+func NewImportExportHandler(pool *pgxpool.Pool, txSvc *services.TransactionService, snapSvc *services.SnapshotService) *ImportExportHandler {
+	return &ImportExportHandler{pool: pool, txSvc: txSvc, snapSvc: snapSvc}
 }
 
 func (h *ImportExportHandler) Routes() chi.Router {
 	r := chi.NewRouter()
 	r.Post("/import", h.handleImport)
 	r.Post("/import/csv", h.handleCSVImport)
+	r.Post("/import/gnucash", h.handleGnuCashImport)
 	r.Get("/export", h.handleExport)
 	r.Post("/reset", h.handleFactoryReset)
 	return r
@@ -552,4 +555,49 @@ func (h *ImportExportHandler) handleFactoryReset(w http.ResponseWriter, r *http.
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"message": "account reset successfully"})
+}
+
+func (h *ImportExportHandler) handleGnuCashImport(w http.ResponseWriter, r *http.Request) {
+	err := r.ParseMultipartForm(10 << 20)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to parse multipart form")
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	exportData, err := ParseGnuCash(file)
+	if err != nil {
+		log.Printf("GnuCash parsing failed: %v", err)
+		writeError(w, http.StatusBadRequest, "invalid gnucash file: "+err.Error())
+		return
+	}
+
+	bookGUID := auth.BookGUIDFromCtx(r.Context())
+	if bookGUID == "" {
+		writeError(w, http.StatusUnauthorized, "missing book guid")
+		return
+	}
+
+	// Auto backup before overriding
+	if h.snapSvc != nil {
+		if _, err := h.snapSvc.TakeSnapshot(r.Context(), "Auto-backup before GnuCash import", models.SnapshotTriggerManual); err != nil {
+			log.Printf("snapshot auto-backup failed: %v", err)
+			writeError(w, http.StatusInternalServerError, "failed to create auto-backup before import")
+			return
+		}
+	}
+
+	if err := performImport(r.Context(), h.pool, bookGUID, *exportData); err != nil {
+		log.Printf("Import failed: %v", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": "GnuCash import successful"})
 }

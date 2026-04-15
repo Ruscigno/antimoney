@@ -28,6 +28,10 @@ const translations: Record<Locale, Record<string, string>> = {
         'data.importCsvBtn': 'Import CSV',
         'data.selectTargetAccount': '-- Select Target Account --',
         'data.importCsvSuccess': 'Successfully imported {{count}} transactions!',
+        'data.importGnucashTitle': 'Import Data (GnuCash)',
+        'data.importGnucashDesc': 'Import accounts and transactions from a .gnucash file. This will REPLACE your current book data.',
+        'data.importGnucashBtn': 'Import from GnuCash',
+        'data.importGnucashSuccess': 'GnuCash import successful!',
 
         // Dashboard
         'dashboard.title': 'Dashboard',
@@ -259,6 +263,10 @@ const translations: Record<Locale, Record<string, string>> = {
         'data.importCsvBtn': 'Importar CSV',
         'data.selectTargetAccount': '-- Selecionar Conta de Destino --',
         'data.importCsvSuccess': '{{count}} transações importadas com sucesso!',
+        'data.importGnucashTitle': 'Importar Dados (GnuCash)',
+        'data.importGnucashDesc': 'Importar contas e transações de um arquivo .gnucash. Isso irá SUBSTITUIR os dados atuais do seu livro.',
+        'data.importGnucashBtn': 'Importar do GnuCash',
+        'data.importGnucashSuccess': 'Importação do GnuCash concluída com sucesso!',
 
         // Dashboard
         'dashboard.title': 'Dashboard',

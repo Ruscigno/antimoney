@@ -8,11 +8,13 @@ export default function DataManagement() {
     const [selectedAccount, setSelectedAccount] = useState<string>('');
     const [importing, setImporting] = useState(false);
     const [importingCSV, setImportingCSV] = useState(false);
+    const [importingGnucash, setImportingGnucash] = useState(false);
     const [exporting, setExporting] = useState(false);
     const [resetting, setResetting] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const csvInputRef = useRef<HTMLInputElement>(null);
+    const gnucashInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         getAccounts().then(data => {
@@ -136,6 +138,42 @@ export default function DataManagement() {
         }
     };
 
+    const handleGnucashImportClick = () => {
+        gnucashInputRef.current?.click();
+    };
+
+    const handleGnucashFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setImportingGnucash(true);
+        setMessage(null);
+
+        try {
+            const token = localStorage.getItem('antimoney-token');
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const res = await fetch('/api/data/import/gnucash', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData
+            });
+
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody.error || `Import failed: ${res.statusText}`);
+            }
+
+            setMessage({ type: 'success', text: t('data.importGnucashSuccess') || 'GnuCash import successful!' });
+            if (gnucashInputRef.current) gnucashInputRef.current.value = '';
+        } catch (err: any) {
+            setMessage({ type: 'error', text: err.message || 'GnuCash import failed' });
+        } finally {
+            setImportingGnucash(false);
+        }
+    };
+
     const handleFactoryReset = async () => {
         if (!window.confirm("Are you sure you want to factory reset your account?\n\nThis will PERMANENTLY delete all your transactions and custom accounts. This action cannot be undone.")) {
             return;
@@ -203,6 +241,23 @@ export default function DataManagement() {
                     />
                     <button className="btn btn-primary" onClick={handleImportClick} disabled={importing || resetting} style={{ marginTop: 8 }}>
                         {importing ? t('common.loading') || 'Loading...' : t('data.importBtn') || 'Import from JSON'}
+                    </button>
+                </div>
+
+                <hr style={{ border: 'none', borderTop: '1px solid var(--border-color)', margin: '16px 0' }} />
+
+                <div>
+                    <h3>{t('data.importGnucashTitle') || 'Import Data (GnuCash)'}</h3>
+                    <p style={{ color: 'var(--text-muted)' }}>{t('data.importGnucashDesc') || 'Import accounts and transactions from a .gnucash file. This will REPLACE your current book data.'}</p>
+                    <input
+                        type="file"
+                        accept=".gnucash"
+                        ref={gnucashInputRef}
+                        onChange={handleGnucashFileChange}
+                        style={{ display: 'none' }}
+                    />
+                    <button className="btn btn-primary" onClick={handleGnucashImportClick} disabled={importingGnucash || resetting} style={{ marginTop: 8 }}>
+                        {importingGnucash ? t('common.loading') || 'Loading...' : t('data.importGnucashBtn') || 'Import from GnuCash'}
                     </button>
                 </div>
 
