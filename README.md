@@ -1,115 +1,155 @@
-# Antimoney 💰
+# Antimoney
 
-Antimoney is a modern, high-performance web-based accounting application designed for individuals and small businesses who value privacy, speed, and a premium user experience. Built on the principles of **double-entry bookkeeping**, it ensures your financial data is always accurate and balanced.
+A modern, high-performance web-based accounting application for individuals and small businesses who value privacy and a clean user experience. Built on **double-entry bookkeeping** principles.
 
-<!-- ![Antimoney Dashboard](/Users/sander/.gemini/antigravity/brain/93389677-d6b1-4bee-9737-66dfac8baa51/antimoney_dashboard_preview_1773882236960.png) -->
-
----
-
-## 🌟 For Users: Professional Personal Finance
-
-Antimoney transforms the way you view your finances. No more spreadsheets or clunky legacy software.
-
-### Key Features
-
-- **Intuitive Dashboard**: At-a-glance view of your Net Worth, Assets, Liabilities, and Cash Flow. Visualize your spending with elegant donut charts and horizontal bars.
-- **Double-Entry Bookkeeping**: A robust system that tracks every cent. Every transaction is a transfer between two or more accounts, ensuring total consistency.
-- **Flexible Chart of Accounts**: Organise your finances into a hierarchical tree of Assets, Liabilities, Income, Expenses, and Equity.
-- **Navigation Breadcrumbs**: Easily navigate large account hierarchies with a dynamic breadcrumb bar at the top of every account register.
-- **Persistent State**: The application remembers which accounts you've expanded or collapsed in the Chart of Accounts, preserving your workspace between sessions.
-- **Reconciliation Wizard**: Easily reconcile your bank statements. The system suggests balances based on specific days and highlights differences in real-time.
-- **Advanced Filtering**: Switch between "Today's Balance" and "Overall Balance" in the Chart of Accounts with a single click.
-- **Interactive Register**:
-  - **Quick Deletion**: Delete transactions directly from any account register with a single click.
-  - **Jump Navigation**: Instantly jump from one side of a transaction to its counterpart account.
-- **Searchable Account Picker**: Efficiently find accounts when creating transactions with a powerful, searchable combobox.
-- **Multi-Split Transactions**: One transaction can be split across multiple accounts (e.g., a single grocery bill split into food and household items).
-- **Import/Export**: Move your data freely with CSV and JSON import/export support.
-- **Premium Dark UI**: A sleek, dark-mode interface with glassmorphism effects and high-contrast highlights for easy navigation.
-- **Bi-lingual Support**: Full support for English and Portuguese (pt-BR).
-
-### How to use it?
-
-1.  **Set up your accounts**: Create your bank accounts, credit cards, and income/expense categories in the **Chart of Accounts**.
-2.  **Record transactions**: Use the **New Transaction** button (Shortcut: `N`) to record your daily spending.
-3.  **Reconcile regularly**: Use the **Reconciliation** button in any account to ensure your digital balance matches your physical bank statement.
-4.  **Analyze**: Use the **Dashboard** to track your cash flow and identify where your money is going.
+![Antimoney Dashboard](docs/dashboard.png)
 
 ---
 
-## 🛠 For Developers: Modern Stack & Architecture
+## Features
 
-Antimoney is designed for performance, scalability, and ease of deployment. It uses a split-architecture approach with a Go backend and a React frontend.
+- **Double-Entry Bookkeeping**: Every transaction is a transfer between two or more accounts — total consistency guaranteed.
+- **Flexible Chart of Accounts**: Hierarchical tree of Assets, Liabilities, Income, Expenses, and Equity accounts.
+- **Intuitive Dashboard**: Net Worth, Assets, Liabilities, Cash Flow at a glance. Donut charts and bar charts for spending visualization.
+- **Interactive Register**: Infinite scroll with cursor-based pagination. Jump between transaction sides. Quick delete. Toggle reconcile state per split.
+- **Reconciliation Wizard**: Step-by-step bank statement reconciliation. Highlights differences in real-time.
+- **Multi-Split Transactions**: One transaction can span multiple accounts (e.g., a grocery bill split into food and household).
+- **Transaction Snapshots**: Point-in-time snapshots of your account balances, with quota limits per user.
+- **Import/Export**: GnuCash `.gnucash` file import; CSV and JSON export.
+- **Advanced Filtering**: Switch between "Today's Balance" and "Overall Balance" in the Chart of Accounts.
+- **Persistent State**: Remembers which accounts you've expanded/collapsed between sessions.
+- **Mobile-Responsive UI**: Fully usable from iPhone SE (375px) through desktop. Collapsible sidebar, stacking grids, full-screen modals on small screens.
+- **Dark UI**: Glassmorphism design system with high-contrast highlights.
+- **Bilingual**: English and Portuguese (pt-BR).
 
-### Technology Stack
+---
 
-- **Backend**: 
-  - **Language**: Go 1.24+
-  - **Web Framework**: Chi Router (minimal, fast, and idiomatic)
-  - **Database Driver**: `pgx` for high-performance PostgreSQL interaction.
-  - **Migrations**: Automated database schema management.
-- **Frontend**:
-  - **Framework**: React 18+ with TypeScript.
-  - **Build Tool**: Vite (blazing fast development and bundling).
-  - **State Management**: React Hooks & TanStack Query (for data fetching/caching).
-  - **Styling**: Vanilla CSS with a customized design system (CSS variables, glassmorphism).
-- **Infrastructure**:
-  - **Containerization**: Docker & Docker Compose.
-  - **Cloud Infrastructure**: Terraform for Google Cloud Platform (Cloud Run, Cloud SQL, Artifact Registry).
-  - **Automated Cleanup**:
-    - **Source Artifacts**: GCS staging bucket has a 7-day TTL lifecycle policy.
-    - **Container Images**: Artifact Registry policy automatically keeps the last 5 tagged images and removes untagged ones.
-  - **Security**: Database sits in private network; JWT-based authentication.
+## Tech Stack
 
-### Getting Started
+| Layer | Technology |
+|---|---|
+| Backend | Go 1.24+, Chi router, `pgx` (PostgreSQL driver) |
+| Frontend | React 18, TypeScript, Vite |
+| State / Data | React hooks, `fetch` API |
+| Styling | Vanilla CSS with CSS custom properties |
+| Database | PostgreSQL 15 |
+| Auth | JWT in HttpOnly `SameSite=Strict` cookie |
+| Infrastructure | Docker Compose (local), GCP Cloud Run + Cloud SQL (production) |
+| IaC | Terraform |
 
-#### Prerequisites
+---
+
+## Key Design Decisions
+
+- **Rational numbers**: Financial amounts are stored as `(numerator, denominator)` integer pairs — never floats. Implemented in the `internal/gnc` package.
+- **Atomic transactions**: A transaction and all its splits are created/read in a single database transaction. Splits must sum to zero; an "Imbalance" account is auto-created if they don't.
+- **HttpOnly cookies**: The JWT auth token lives in an `HttpOnly; SameSite=Strict; Secure` cookie set by the backend. Only non-sensitive user metadata is cached in `localStorage`.
+- **Optimistic concurrency**: `version` columns on key rows; stale updates are rejected.
+- **Post-date normalization**: Transaction dates are normalized to 11:00 UTC to prevent timezone drift.
+- **Multi-tenancy**: Each user has a `book_guid`; every query is scoped to it via request context.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
 - Docker & Docker Compose
 - Go 1.24+
 - Node.js 18+ & npm
 
-#### Running Locally
-The easiest way to start developing is using the provided `Makefile`:
+### Running Locally
 
 ```bash
-# Build both frontend and backend
-make build
-
-# Start the full stack (Postgres, Backend, Frontend)
+# Start Postgres + backend + frontend
 make up
 
-# Stop the containers
+# Stop all containers
 make down
+
+# Rebuild Docker images after code changes
+make build
+
+# View logs
+make logs
 ```
 
-The application will be available at `http://localhost:5173` (Frontend) and `http://localhost:8080/api` (Backend).
+Frontend: `http://localhost:5173`  
+Backend API: `http://localhost:8000/api`
 
-### Deployment
+### Running Tests
 
-Antimoney includes a full CI/CD pipeline for Google Cloud Platform.
+```bash
+# Backend + frontend unit tests
+make test
 
-1.  **Initialize Infrastructure**:
-    ```bash
-    cd infra
-    terraform init
-    terraform apply
-    ```
-2.  **Deploy to Cloud Run**:
-    ```bash
-    ./deploy.sh
-    ```
-    This script builds the Docker images via Cloud Build, pushes them to Artifact Registry, and deploys the service to Cloud Run.
-
-### Project Structure
-
-- `/cmd/server`: Entry point for the Go API server.
-- `/internal`: Core business logic, database handlers, and accounting engine.
-- `/frontend/src`: React application sources.
-- `/infra`: Terraform configuration for GCP.
-- `/migrations`: SQL files for database versioning.
+# End-to-end tests (Playwright)
+make e2e
+```
 
 ---
 
-## ⚖ License
+## Project Structure
 
-This project is open-source. See the LICENSE file for more details.
+```
+/
+├── backend/
+│   ├── cmd/server/        # Entry point (router setup, migrations, seed)
+│   ├── internal/
+│   │   ├── handlers/      # HTTP handlers (thin: parse → call service → JSON)
+│   │   ├── services/      # Business logic
+│   │   ├── models/        # Domain types (Account, Transaction, Split, User)
+│   │   ├── gnc/           # Rational number engine
+│   │   └── auth/          # JWT middleware
+│   └── migrations/        # SQL migration files
+├── frontend/
+│   └── src/
+│       ├── api/client.ts  # All API calls (401 → session-expired event)
+│       ├── auth/          # AuthContext (HttpOnly cookie flow)
+│       ├── components/    # Reusable UI (AccountTree, TransactionForm, Register, …)
+│       ├── pages/         # Routed pages (Dashboard, Accounts, Transactions, …)
+│       ├── types/         # TypeScript interfaces mirroring backend contracts
+│       ├── i18n.ts        # EN + pt-BR translations
+│       └── index.css      # Global styles + responsive breakpoints
+├── infra/                 # Terraform (GCP Cloud Run, Cloud SQL, Artifact Registry)
+├── docs/                  # Project assets (screenshots)
+└── Makefile
+```
+
+---
+
+## Deployment (GCP)
+
+1. **Initialize infrastructure**:
+   ```bash
+   cd infra
+   terraform init
+   terraform apply
+   ```
+
+2. **Deploy to Cloud Run**:
+   ```bash
+   ./deploy.sh
+   ```
+   Builds Docker images via Cloud Build, pushes to Artifact Registry, deploys to Cloud Run.
+
+**Automated cleanup policies**:
+- GCS staging bucket: 7-day TTL lifecycle policy
+- Artifact Registry: keeps the last 5 tagged images; untagged images are removed automatically
+
+---
+
+## Security
+
+- JWT stored in `HttpOnly; SameSite=Strict; Secure` cookie — not accessible to JavaScript.
+- HSTS header enforced in production.
+- Password policy: minimum 8 characters, enforced at registration.
+- All API endpoints require valid JWT; `book_guid` scopes every query to the authenticated user.
+- Database in private VPC (Cloud SQL); not publicly accessible.
+- Input validation on all API boundaries.
+
+---
+
+## License
+
+Open-source. See the LICENSE file for details.

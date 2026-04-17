@@ -493,6 +493,29 @@ a:hover {
   font-size: 0.85rem;
 }
 
+/* ── Transactions table: responsive splits column ── */
+
+/* Amount is always visible on every layout */
+.splits-amount {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--color-income);
+  margin-bottom: 4px;
+}
+
+/* Splits detail shown below the amount on desktop, hidden on mobile */
+.splits-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+}
+
+.tx-label-short {
+  display: none; /* shown only on mobile via media query */
+}
+
 .empty-state {
   text-align: center;
   padding: 48px 24px;
@@ -810,7 +833,9 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   padding: 64px;
+  min-height: 50vh;
   color: var(--text-muted);
 }
 
@@ -1069,4 +1094,179 @@ tr.row-today.hoverable-row:hover {
 
 tr.row-future.hoverable-row:hover {
   background-color: rgba(245, 158, 11, 0.12);
+}
+
+/* ============================================
+   Responsive Dashboard grids
+   (Dashboard.tsx uses inline styles; these CSS
+   classes let media queries override them)
+   ============================================ */
+.dashboard-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.dashboard-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+/* ReconcileWizard dual-panel */
+.reconcile-funds-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* Mobile hamburger — hidden on desktop */
+.mobile-menu-btn {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin-bottom: 12px;
+  align-self: flex-start;
+}
+
+/* Sidebar close button — hidden on desktop */
+.sidebar-close-btn {
+  display: none;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+}
+
+/* Tap-to-close overlay — hidden on desktop */
+.sidebar-overlay {
+  display: none;
+}
+
+/* ============================================
+   Breakpoint: tablet landscape / large tablet
+   ============================================ */
+@media (max-width: 1100px) {
+  .dashboard-stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* ============================================
+   Breakpoint: mobile (≤ 768px)
+   ============================================ */
+@media (max-width: 768px) {
+  /* Hamburger / close buttons */
+  .mobile-menu-btn  { display: flex; }
+  .sidebar-close-btn { display: block; }
+
+  /* Sidebar slides in from the left as an overlay */
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 200;
+  }
+  .sidebar[data-open="true"] {
+    transform: translateX(0);
+  }
+
+  /* Backdrop shown by React only when sidebarOpen=true */
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 199;
+  }
+
+  /* Main content fills the full width */
+  .main-content {
+    margin-left: 0;
+    max-width: 100vw;
+    padding: 16px;
+  }
+
+  /* Hide ⌥ keyboard shortcut hints — irrelevant on touch */
+  .kbd-nav { display: none; }
+
+  /* Dashboard grids */
+  .dashboard-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .dashboard-two-col    { grid-template-columns: 1fr; }
+
+  /* Register table — hide non-essential columns */
+  .col-num, .col-memo, .col-transfer { display: none; }
+  .col-description { min-width: 120px; }
+  .col-deposit, .col-withdrawal { width: 80px; font-size: 0.8rem; }
+  .col-balance  { width: 85px; font-size: 0.8rem; }
+  .register-table-wrapper { max-height: calc(100vh - 140px); }
+
+  /* General page layout */
+  .page-container { padding: 0; }
+  .page-header    { flex-wrap: wrap; gap: 8px; }
+  .card           { padding: 16px; }
+
+  /* Better touch targets for all buttons */
+  .btn { min-height: 40px; }
+}
+
+/* ============================================
+   Breakpoint: small phones (≤ 640px)
+   ============================================ */
+@media (max-width: 640px) {
+  /* Form rows stack to single column */
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+
+  /* Split entry: account picker full-width, amounts on next row */
+  .split-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  /* Modal goes full-screen */
+  .modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+    padding: 16px;
+    margin: 0;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+  }
+  .modal-overlay { align-items: flex-start; }
+
+  /* ReconcileWizard panels stack vertically */
+  .reconcile-funds-grid { grid-template-columns: 1fr; }
+
+  .page-title { font-size: 1.2rem; }
+  .stats-grid { grid-template-columns: 1fr; }
+
+  /* Transactions table: hide verbose splits detail on small screens */
+  .col-tx-splits .splits-detail { display: none; }
+
+  /* Action buttons: use single-character labels to save space */
+  .tx-label-long  { display: none; }
+  .tx-label-short { display: inline; }
+  .col-tx-actions .btn { padding: 6px 10px; min-width: 36px; justify-content: center; }
+}
+
+/* ============================================
+   Breakpoint: extra-small (≤ 480px)
+   ============================================ */
+@media (max-width: 480px) {
+  .main-content { padding: 12px; }
+  .dashboard-stats-grid { grid-template-columns: 1fr; }
+  .register-table th,
+  .register-table td { padding: 6px 4px; font-size: 0.78rem; }
 }

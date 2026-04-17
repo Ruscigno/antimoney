@@ -243,7 +243,7 @@ export default function ReconcileWizard({ accountGuids, accountName, accountType
 
     return (
         <div className="modal-overlay" onClick={onClose}>
-            <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 900, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
+            <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 'min(900px, 100%)', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                     <h2 className="modal-title" style={{ margin: 0 }}>
                         {accountName} — {t('reconcile.title')}
@@ -258,7 +258,7 @@ export default function ReconcileWizard({ accountGuids, accountName, accountType
                     </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, flex: 1, overflow: 'hidden' }}>
+                <div className="reconcile-funds-grid" style={{ flex: 1, overflow: 'hidden' }}>
                     {/* Funds In (Decreases debt for Liability) */}
                     <div style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                         <h3 style={{ fontSize: '0.85rem', fontWeight: 600, marginBottom: 8, color: 'var(--color-income)' }}>

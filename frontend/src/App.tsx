@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
@@ -17,6 +18,7 @@ initLocale();
 function AppContent() {
     useGlobalShortcuts();
     const { user, loading, logout } = useAuth();
+    const [sidebarOpen, setSidebarOpen] = useState(false);
 
     if (loading) {
         return (
@@ -32,8 +34,23 @@ function AppContent() {
 
     return (
         <div className="app-layout">
-            <Sidebar onLogout={logout} userEmail={user.email} />
+            <Sidebar
+                onLogout={logout}
+                userEmail={user.email}
+                isOpen={sidebarOpen}
+                onClose={() => setSidebarOpen(false)}
+            />
+            {sidebarOpen && (
+                <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />
+            )}
             <main className="main-content">
+                <button
+                    className="mobile-menu-btn"
+                    onClick={() => setSidebarOpen(true)}
+                    aria-label="Open menu"
+                >
+                    ☰
+                </button>
                 <Routes>
                     <Route path="/" element={<Dashboard />} />
                     <Route path="/accounts" element={<Accounts />} />

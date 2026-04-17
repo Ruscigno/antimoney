@@ -9,6 +9,15 @@ function formatSplitCurrency(value: number, denom: number): string {
     return formatCurrency(value / denom);
 }
 
+// Sum of positive splits = transaction magnitude (works for both expenses and income)
+function getTxTotal(txn: Transaction): string {
+    const total = (txn.splits ?? []).reduce(
+        (sum, s) => (s.value_num > 0 ? sum + s.value_num / s.value_denom : sum),
+        0,
+    );
+    return formatCurrency(total);
+}
+
 export default function Transactions() {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [loading, setLoading] = useState(true);
@@ -99,22 +108,27 @@ export default function Transactions() {
                                     <td className="col-num">{txn.custom_id || idx + 1}</td>
                                     <td className="col-date">{formatDate(txn.post_date)}</td>
                                     <td className="col-description">{txn.description}</td>
-                                    <td>
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.8rem' }}>
+                                    <td className="col-tx-splits">
+                                        {/* Desktop: full splits detail */}
+                                        <div className="splits-detail">
                                             {txn.splits?.map(s => (
                                                 <span key={s.guid} style={{ color: s.value_num >= 0 ? 'var(--color-income)' : 'var(--color-expense)' }}>
                                                     {s.account_name || s.account_guid.slice(0, 8)} → {formatSplitCurrency(s.value_num, s.value_denom)}
                                                 </span>
                                             ))}
                                         </div>
+                                        {/* Mobile: compact total amount */}
+                                        <span className="splits-amount">{getTxTotal(txn)}</span>
                                     </td>
-                                    <td>
+                                    <td className="col-tx-actions">
                                         <div style={{ display: 'flex', gap: 4 }}>
                                             <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); setDuplicateTxGuid(txn.guid); }} style={{ padding: '6px 12px', fontSize: '0.85rem' }}>
-                                                {t('common.duplicate')}
+                                                <span className="tx-label-long">{t('common.duplicate')}</span>
+                                                <span className="tx-label-short">⧉</span>
                                             </button>
                                             <button className="btn btn-danger" onClick={(e) => { e.stopPropagation(); handleDelete(txn.guid); }} style={{ padding: '4px 10px', fontSize: '0.75rem' }}>
-                                                {t('transactions.delete')}
+                                                <span className="tx-label-long">{t('transactions.delete')}</span>
+                                                <span className="tx-label-short">✕</span>
                                             </button>
                                         </div>
                                     </td>

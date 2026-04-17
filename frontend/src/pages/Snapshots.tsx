@@ -145,7 +145,7 @@ export default function Snapshots() {
                     {t('snapshots.scheduleDesc')}
                 </p>
                 <form onSubmit={handleSaveConfig}>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+                    <div className="dashboard-two-col" style={{ gap: 16, marginBottom: 16 }}>
                         <div className="form-group">
                             <label className="form-label">{t('snapshots.frequency')}</label>
                             <input

@@ -382,10 +382,7 @@ export default function Dashboard() {
             </div>
 
             {/* ── Row 1: Compact metric cards ── */}
-            <div className="stats-grid" style={{
-                display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)',
-                gap: 12, marginBottom: 20,
-            }}>
+            <div className="dashboard-stats-grid" style={{ gap: 12, marginBottom: 20 }}>
                 <div className="stat-card" style={{
                     position: 'relative', overflow: 'hidden',
                     display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -414,7 +411,7 @@ export default function Dashboard() {
             </div>
 
             {/* ── Row 2: Cash Flow + Expense Breakdown ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+            <div className="dashboard-two-col" style={{ gap: 16, marginBottom: 16 }}>
                 {/* Cash Flow */}
                 <div className="card" style={{ padding: '18px 20px' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
@@ -457,7 +454,7 @@ export default function Dashboard() {
             </div>
 
             {/* ── Row 3: Top Accounts + Balance Overview ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div className="dashboard-two-col" style={{ gap: 16, marginBottom: 0 }}>
                 {/* Top 10 Accounts */}
                 <div className="card" style={{ padding: '18px 20px' }}>
                     <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 14, textTransform: 'uppercase', letterSpacing: '0.03em' }}>

@@ -15,9 +15,9 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
     });
 
     if (res.status === 401) {
-        // Session expired or revoked — clear cached user info and reload to login
+        // Session expired or revoked — clear cached user info and navigate to login
         localStorage.removeItem('antimoney-user');
-        window.location.reload();
+        window.dispatchEvent(new Event('auth:session-expired'));
         throw new Error('Session expired');
     }
 

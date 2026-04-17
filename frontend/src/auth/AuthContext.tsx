@@ -30,9 +30,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<AuthUser | null>(null);
     const [loading, setLoading] = useState(true);
 
+    // Handle session expiry events dispatched by the API client on 401 responses.
+    useEffect(() => {
+        const handleExpired = () => setUser(null);
+        window.addEventListener('auth:session-expired', handleExpired);
+        return () => window.removeEventListener('auth:session-expired', handleExpired);
+    }, []);
+
     // On mount: restore cached user info immediately, then validate with server.
     // The HttpOnly auth_token cookie is sent automatically — no manual token handling.
+    // A `cancelled` flag prevents stale fetch completions (e.g. React StrictMode
+    // double-invoke in dev, or slow network) from overriding state set by login().
     useEffect(() => {
+        let cancelled = false;
+
         const saved = localStorage.getItem(USER_CACHE_KEY);
         if (saved) {
             try { setUser(JSON.parse(saved) as AuthUser); } catch { /* stale cache */ }
@@ -44,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return r.json();
             })
             .then(data => {
+                if (cancelled) return;
                 const u: AuthUser = {
                     user_id: data.user_id,
                     book_guid: data.book_guid,
@@ -54,10 +66,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 localStorage.setItem(USER_CACHE_KEY, JSON.stringify(u));
             })
             .catch(() => {
+                if (cancelled) return;
                 localStorage.removeItem(USER_CACHE_KEY);
                 setUser(null);
             })
-            .finally(() => setLoading(false));
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+
+        return () => { cancelled = true; };
     }, []);
 
     const login = async (email: string, password: string) => {
