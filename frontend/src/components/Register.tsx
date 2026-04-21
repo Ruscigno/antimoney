@@ -8,6 +8,8 @@ interface RegisterProps {
     entries: RegisterEntry[];
     accountName: string;
     accountType?: AccountType;
+    /** If set, the register will scroll to this date on initial load instead of today */
+    scrollTargetDate?: string;
     onReconcileStateChanged?: (splitGuid: string, newState: string) => void;
     onEditTransaction?: (guid: string) => void;
     onDuplicateTransaction?: (guid: string) => void;
@@ -19,7 +21,7 @@ interface RegisterProps {
 }
 
 export default function Register({
-    entries, accountName, accountType,
+    entries, accountName, accountType, scrollTargetDate,
     onReconcileStateChanged, onEditTransaction, onDuplicateTransaction, onDeleteTransaction,
     hasBefore, hasAfter, onLoadMore, loadingMore,
 }: RegisterProps) {
@@ -143,12 +145,13 @@ export default function Register({
         return [isHoverable ? 'hoverable-row' : '', timeClass].filter(Boolean).join(' ');
     };
 
-    // Find the best entry to scroll to on initial load:
+    // Find the best entry to scroll to on initial load (uses scrollTargetDate when provided, otherwise today):
+    const targetDate = scrollTargetDate ?? todayStr;
     let focusIndex = entries.length > 0 ? entries.length - 1 : -1;
     for (let i = 0; i < entries.length; i++) {
         const d = entries[i].post_date.split('T')[0];
-        if (d >= todayStr) {
-            focusIndex = d === todayStr ? i : Math.max(0, i - 1);
+        if (d >= targetDate) {
+            focusIndex = d === targetDate ? i : Math.max(0, i - 1);
             break;
         }
     }
@@ -220,7 +223,7 @@ export default function Register({
                                             <button
                                                 className="btn-icon btn-jump"
                                                 title={t('register.jump')}
-                                                onClick={() => navigate(`/accounts/${entry.transfer_account_guid}`)}
+                                                onClick={(e) => { e.stopPropagation(); navigate(`/accounts/${entry.transfer_account_guid}`, { state: { cursorDate: entry.post_date.split('T')[0] } }); }}
                                                 style={{
                                                     background: 'none', border: 'none', cursor: 'pointer',
                                                     padding: '2px 4px', fontSize: '0.75rem', color: 'var(--text-muted)',

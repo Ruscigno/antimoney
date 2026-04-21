@@ -7,13 +7,14 @@ interface AccountPickerProps {
     value: string;
     onChange: (guid: string) => void;
     id?: string;
+    tabIndex?: number;
 }
 
 /**
  * Searchable account picker with type-ahead filtering.
  * Replaces the plain <select> with a combobox that filters as you type.
  */
-export default function AccountPicker({ accounts, value, onChange, id }: AccountPickerProps) {
+export default function AccountPicker({ accounts, value, onChange, id, tabIndex }: AccountPickerProps) {
     const [query, setQuery] = useState('');
     const [open, setOpen] = useState(false);
     const [highlightIdx, setHighlightIdx] = useState(0);
@@ -93,10 +94,12 @@ export default function AccountPicker({ accounts, value, onChange, id }: Account
         <div className="account-picker" ref={wrapperRef}>
             <div
                 className={`account-picker-trigger form-input ${open ? 'focused' : ''}`}
+                tabIndex={open ? -1 : (tabIndex ?? 0)}
                 onClick={() => {
                     setOpen(true);
                     setTimeout(() => inputRef.current?.focus(), 0);
                 }}
+                onKeyDown={handleKeyDown}
             >
                 {open ? (
                     <input

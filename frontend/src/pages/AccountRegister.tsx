@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useLocation } from 'react-router-dom';
 import { getAccount, getAccountRegisterPaged, deleteTransaction, getAccounts } from '../api/client';
 import Register from '../components/Register';
 import TransactionForm from '../components/TransactionForm';
@@ -18,6 +18,15 @@ function getTodayStr(): string {
 
 export default function AccountRegister() {
     const { id } = useParams<{ id: string }>();
+    const location = useLocation();
+    // Derive the jump-cursor date from current navigation state on every render.
+    // A plain useRef init would only run once at mount — wrong when React Router
+    // reuses this component instance while navigating between accounts.
+    const jumpCursorDate = (location.state as { cursorDate?: string } | null)?.cursorDate;
+    // Keep a ref in sync so the effect can read the latest value without
+    // needing to declare it as a dependency (we only reload when the account id changes).
+    const jumpCursorDateRef = useRef<string | undefined>(jumpCursorDate);
+    jumpCursorDateRef.current = jumpCursorDate;
     const [account, setAccount] = useState<Account | null>(null);
     const [allAccounts, setAllAccounts] = useState<Account[]>([]);
     const [entries, setEntries] = useState<RegisterEntry[]>([]);
@@ -32,16 +41,19 @@ export default function AccountRegister() {
 
     const firstOffsetRef = useRef<number | null>(null);
     const lastOffsetRef = useRef<number | null>(null);
+    // Track the cursor date used for the current page so refreshes stay centred on the same date
+    const pageCursorRef = useRef<string>(getTodayStr());
 
     // N shortcut opens new transaction form
     useShortcut('n', () => setShowForm(true), t('shortcuts.newTx'), undefined, []);
 
-    // Initial load: fetch account info + page of entries around today
-    const loadInitialData = useCallback(() => {
+    // Initial load: fetch account info + page of entries around cursorDate (defaults to today)
+    const loadInitialData = useCallback((cursorDate?: string) => {
         if (!id) return;
         setLoading(true);
-        const todayStr = getTodayStr();
-        Promise.all([getAccount(id), getAccountRegisterPaged(id, todayStr, 'around', PAGE_SIZE), getAccounts()])
+        const dateToUse = cursorDate ?? getTodayStr();
+        pageCursorRef.current = dateToUse;
+        Promise.all([getAccount(id), getAccountRegisterPaged(id, dateToUse, 'around', PAGE_SIZE), getAccounts()])
             .then(([acc, page, all]) => {
                 setAccount(acc);
                 setAllAccounts(all);
@@ -125,10 +137,15 @@ export default function AccountRegister() {
         ));
     }, []);
 
+    // Refresh around the same cursor date that was loaded (preserves scroll position)
+    const refreshCurrentPage = useCallback(() => {
+        loadInitialData(pageCursorRef.current);
+    }, [loadInitialData]);
+
     // Full reload (after creating/editing/deleting transactions or finishing reconcile wizard)
     const handleDataChanged = useCallback(() => {
-        loadInitialData();
-    }, [loadInitialData]);
+        refreshCurrentPage();
+    }, [refreshCurrentPage]);
 
     const handleDeleteTransaction = async (guid: string) => {
         try {
@@ -140,7 +157,11 @@ export default function AccountRegister() {
     };
 
     useEffect(() => {
-        loadInitialData();
+        // jumpCursorDateRef.current is the cursor date from the current navigation —
+        // kept in sync on every render, but intentionally not in deps so we only
+        // reload when the account id changes, not on every location change.
+        loadInitialData(jumpCursorDateRef.current);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadInitialData]);
 
     if (loading) {
@@ -178,6 +199,7 @@ export default function AccountRegister() {
                 entries={entries}
                 accountName={account.name}
                 accountType={account.account_type}
+                scrollTargetDate={jumpCursorDate}
                 onReconcileStateChanged={handleReconcileStateChanged}
                 onEditTransaction={setEditTxGuid}
                 onDuplicateTransaction={setDuplicateTxGuid}

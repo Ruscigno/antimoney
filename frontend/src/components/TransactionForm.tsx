@@ -37,8 +37,9 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
     const [initialSplitsMap, setInitialSplitsMap] = useState<Record<string, number>>({});
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [error, setError] = useState<string | null>(null);
-    const [loading, setLoading] = useState(false);
-    const descriptionRef = useRef<HTMLInputElement>(null);
+    // Start in loading state when editing/duplicating so the form never shows stale defaults
+    const [loading, setLoading] = useState(!!(editTxGuid || duplicateTxGuid));
+    const dateRef = useRef<HTMLInputElement>(null);
 
     // ESC closes the modal
     useShortcut('Escape', onClose, t('shortcuts.close'), undefined, [onClose]);
@@ -81,10 +82,12 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
         }
     }, [editTxGuid, duplicateTxGuid]);
 
-    // Auto-focus description field
+    // Focus the date field once data is ready (fires immediately for new tx, after fetch for edit/dup)
     useEffect(() => {
-        setTimeout(() => descriptionRef.current?.focus(), 100);
-    }, []);
+        if (!loading) {
+            setTimeout(() => dateRef.current?.focus(), 50);
+        }
+    }, [loading]);
 
     const evaluateMath = (expr: string): string => {
         try {
@@ -217,6 +220,11 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                     <kbd className="kbd-hint">Esc</kbd>
                 </div>
 
+                {loading && (editTxGuid || duplicateTxGuid) ? (
+                    <div className="loading" style={{ minHeight: 120 }}>
+                        <div className="loading-spinner" />
+                    </div>
+                ) : (
                 <form onSubmit={handleSubmit}>
                     <div className="form-row" style={{ gridTemplateColumns: '140px 100px 1fr' }}>
                         <div className="form-group">
@@ -229,11 +237,13 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                 )}
                             </label>
                             <input
+                                ref={dateRef}
                                 type="date"
                                 className="form-input"
                                 value={postDate}
                                 onChange={e => setPostDate(e.target.value)}
                                 onKeyDown={e => handleDateShortcut(e, postDate, setPostDate)}
+                                tabIndex={1}
                                 required
                             />
                         </div>
@@ -245,12 +255,12 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                 placeholder="Optional"
                                 value={customId}
                                 onChange={e => setCustomId(e.target.value)}
+                                tabIndex={2}
                             />
                         </div>
                         <div className="form-group">
                             <label className="form-label">{t('form.description')}</label>
                             <input
-                                ref={descriptionRef}
                                 type="text"
                                 className="form-input"
                                 placeholder={t('form.descriptionPlaceholder')}
@@ -258,6 +268,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                 onChange={e => setDescription(e.target.value)}
                                 required
                                 id="tx-description"
+                                tabIndex={3}
                             />
                         </div>
                     </div>
@@ -291,6 +302,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                             value={split.account_guid}
                                             onChange={(guid) => updateSplit(i, 'account_guid', guid)}
                                             id={`split-account-${i}`}
+                                            tabIndex={10 + i * 3}
                                         />
                                     </div>
                                     <button
@@ -329,6 +341,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                         onBlur={() => handleAmountBlur(i)}
                                         onChange={e => updateSplit(i, 'amount', e.target.value)}
                                         id={`split-value-${i}`}
+                                        tabIndex={11 + i * 3}
                                     />
                                     {acc && (
                                         <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', textAlign: 'right', marginTop: 2, paddingRight: 4, whiteSpace: 'nowrap' }}>
@@ -342,6 +355,7 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                     placeholder={t('form.memo')}
                                     value={split.memo}
                                     onChange={e => updateSplit(i, 'memo', e.target.value)}
+                                    tabIndex={12 + i * 3}
                                 />
                                 <button
                                     type="button"
@@ -350,13 +364,14 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                                     disabled={splits.length <= 1}
                                     title={t('form.removeSplit')}
                                     aria-label="Remove split"
+                                    tabIndex={-1}
                                 >
                                     ✕
                                 </button>
                             </div>
                         )})}
 
-                        <button type="button" className="btn btn-secondary" onClick={addSplit} style={{ marginTop: 8 }}>
+                        <button type="button" className="btn btn-secondary" onClick={addSplit} style={{ marginTop: 8 }} tabIndex={-1}>
                             {t('form.addSplit')}
                         </button>
                     </div>
@@ -375,12 +390,13 @@ export default function TransactionForm({ onClose, onCreated, defaultAccountGuid
                         <span style={{ flex: 1, fontSize: '0.7rem', color: 'var(--text-muted)' }}>
                             <kbd className="kbd-hint">Ctrl+↵</kbd> submit
                         </span>
-                        <button type="button" className="btn btn-secondary" onClick={onClose}>{t('form.cancel')}</button>
-                        <button type="submit" className="btn btn-primary" disabled={loading} id="tx-submit">
+                        <button type="button" className="btn btn-secondary" onClick={onClose} tabIndex={-1}>{t('form.cancel')}</button>
+                        <button type="submit" className="btn btn-primary" disabled={loading} id="tx-submit" tabIndex={50}>
                             {loading ? (editTxGuid ? t('common.saving') : t('form.creating')) : (editTxGuid ? t('common.save') : t('form.create'))}
                         </button>
                     </div>
                 </form>
+                )}
             </div>
         </div>
     );
