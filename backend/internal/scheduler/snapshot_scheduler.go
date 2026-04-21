@@ -22,8 +22,17 @@ const (
 //  3. For books with frequency_hours>0, takes a scheduled snapshot once the
 //     configured interval has elapsed since the last snapshot.
 //
+// An initial check runs immediately on startup so that any backup overdue during
+// server downtime (e.g. Cloud Run scale-to-zero) is taken as soon as the instance
+// starts, without waiting for the first 60-second tick.
+//
 // The goroutine exits when ctx is cancelled (on server shutdown).
 func StartSnapshotScheduler(ctx context.Context, svc *services.SnapshotService) {
+	// Run immediately on startup to catch any backups that were due while the
+	// server was scaled down. Without this, the first check would be delayed
+	// by up to tickInterval (60 s), which can outlive a short Cloud Run session.
+	runTick(ctx, svc)
+
 	ticker := time.NewTicker(tickInterval)
 	defer ticker.Stop()
 
