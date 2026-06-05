@@ -38,3 +38,14 @@ jobs:
         run: cd frontend && npm run test
       - name: Run NPM Audit Security Scanner
         run: cd frontend && npm audit --audit-level=high || true
+
+  deploy-script-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Lint deploy.sh (ShellCheck)
+        run: shellcheck deploy.sh
+      - name: Set up Bats
+        uses: bats-core/bats-action@3.0.0
+      - name: Test deploy.sh (Bats)
+        run: bats tests/
