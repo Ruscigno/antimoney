@@ -534,14 +534,15 @@ func (s *TransactionService) GetAccountRegister(ctx context.Context, accountGUID
 			}
 		}
 
-		transferName, transferGUID, err := s.getTransferAccount(ctx, txGUID, accountGUID)
-		if err != nil {
-			return nil, err
-		}
-		entry.TransferAccount = transferName
-		entry.TransferAccountGUID = transferGUID
-
 		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Resolve all transfer-account columns in one batched query (avoids N+1).
+	if err := s.fillTransferAccounts(ctx, entries, accountGUID); err != nil {
+		return nil, err
 	}
 
 	return entries, nil
@@ -759,14 +760,15 @@ func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accoun
 			}
 		}
 
-		transferName, transferGUID, err := s.getTransferAccount(ctx, txGUID, accountGUID)
-		if err != nil {
-			return nil, err
-		}
-		entry.TransferAccount = transferName
-		entry.TransferAccountGUID = transferGUID
-
 		entries = append(entries, entry)
+	}
+	if err := pageRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Resolve all transfer-account columns in one batched query (avoids N+1).
+	if err := s.fillTransferAccounts(ctx, entries, accountGUID); err != nil {
+		return nil, err
 	}
 
 	endOffset := queryOffset + len(entries) - 1
@@ -783,33 +785,93 @@ func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accoun
 	}, nil
 }
 
-func (s *TransactionService) getTransferAccount(ctx context.Context, txGUID, excludeAccountGUID string) (string, string, error) {
+const splitTransactionLabel = "-- Split Transaction --"
+
+type transferAccountInfo struct {
+	name string
+	guid string
+}
+
+// getTransferAccountsBatch resolves the transfer-account column for many
+// transactions in a single query, avoiding the N+1 a per-row lookup causes on a
+// large register. For each transaction it inspects the splits NOT in
+// excludeAccountGUID: exactly one such split is a direct transfer (its account
+// name + guid); zero or more than one is a "-- Split Transaction --". Every
+// txGUID passed in is present in the returned map.
+func (s *TransactionService) getTransferAccountsBatch(ctx context.Context, txGUIDs []string, excludeAccountGUID string) (map[string]transferAccountInfo, error) {
+	result := make(map[string]transferAccountInfo, len(txGUIDs))
+	if len(txGUIDs) == 0 {
+		return result, nil
+	}
+
 	rows, err := s.pool.Query(ctx,
-		`SELECT a.guid, a.name FROM splits s JOIN accounts a ON s.account_guid = a.guid
-		 WHERE s.tx_guid = $1 AND s.account_guid != $2`, txGUID, excludeAccountGUID,
+		`SELECT s.tx_guid, a.guid, a.name
+		 FROM splits s JOIN accounts a ON s.account_guid = a.guid
+		 WHERE s.tx_guid = ANY($1) AND s.account_guid != $2`,
+		txGUIDs, excludeAccountGUID,
 	)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer rows.Close()
 
-	type acctInfo struct {
-		guid string
-		name string
-	}
-	var accts []acctInfo
+	counts := make(map[string]int, len(txGUIDs))
+	firstMatch := make(map[string]transferAccountInfo, len(txGUIDs))
 	for rows.Next() {
-		var a acctInfo
-		if err := rows.Scan(&a.guid, &a.name); err != nil {
-			return "", "", err
+		var txGUID, acctGUID, acctName string
+		if err := rows.Scan(&txGUID, &acctGUID, &acctName); err != nil {
+			return nil, err
 		}
-		accts = append(accts, a)
+		counts[txGUID]++
+		if counts[txGUID] == 1 {
+			firstMatch[txGUID] = transferAccountInfo{name: acctName, guid: acctGUID}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
-	if len(accts) == 1 {
-		return accts[0].name, accts[0].guid, nil
+	seen := make(map[string]bool, len(txGUIDs))
+	for _, g := range txGUIDs {
+		if seen[g] {
+			continue
+		}
+		seen[g] = true
+		if counts[g] == 1 {
+			result[g] = firstMatch[g]
+		} else {
+			result[g] = transferAccountInfo{name: splitTransactionLabel}
+		}
 	}
-	return "-- Split Transaction --", "", nil
+	return result, nil
+}
+
+// fillTransferAccounts resolves and assigns the transfer-account column for the
+// given register entries using one batched query (see getTransferAccountsBatch).
+func (s *TransactionService) fillTransferAccounts(ctx context.Context, entries []models.RegisterEntry, accountGUID string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	txGUIDs := make([]string, 0, len(entries))
+	seen := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if !seen[e.TransactionGUID] {
+			seen[e.TransactionGUID] = true
+			txGUIDs = append(txGUIDs, e.TransactionGUID)
+		}
+	}
+
+	transfers, err := s.getTransferAccountsBatch(ctx, txGUIDs, accountGUID)
+	if err != nil {
+		return err
+	}
+
+	for i := range entries {
+		info := transfers[entries[i].TransactionGUID]
+		entries[i].TransferAccount = info.name
+		entries[i].TransferAccountGUID = info.guid
+	}
+	return nil
 }
 
 // ToggleSplitAcknowledge toggles a split between 'n' and 'c' states.

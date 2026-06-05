@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 import { getAccount, getAccountRegister, getAccountRegisterPaged, deleteTransaction, getAccounts } from '../api/client';
 import Register from '../components/Register';
@@ -53,10 +53,18 @@ export default function AccountRegister() {
     // Search filters across ALL of the account's transactions (not just the loaded
     // page). When a query is active we lazily fetch the full register once and
     // filter it client-side, preserving the server-computed running balances.
+    // `search` tracks the input for instant feedback; `debouncedSearch` (200ms)
+    // drives the actual fetch + filtering so typing stays smooth on large accounts.
     const [search, setSearch] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
     const [allEntries, setAllEntries] = useState<RegisterEntry[] | null>(null);
     const [searchLoading, setSearchLoading] = useState(false);
-    const isSearching = search.trim() !== '';
+    const isSearching = debouncedSearch.trim() !== '';
+
+    const clearSearch = useCallback(() => {
+        setSearch('');
+        setDebouncedSearch('');
+    }, []);
 
     const firstOffsetRef = useRef<number | null>(null);
     const lastOffsetRef = useRef<number | null>(null);
@@ -170,12 +178,18 @@ export default function AccountRegister() {
         // kept in sync on every render, but intentionally not in deps so we only
         // reload when the account id changes, not on every location change.
         loadInitialData(jumpCursorDateRef.current);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadInitialData]);
+
+    // Debounce the search input so filtering/fetching doesn't run on every keystroke.
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(search), 200);
+        return () => clearTimeout(timer);
+    }, [search]);
 
     // Reset the search when navigating to a different account.
     useEffect(() => {
         setSearch('');
+        setDebouncedSearch('');
         setAllEntries(null);
     }, [id]);
 
@@ -194,8 +208,11 @@ export default function AccountRegister() {
     }, [id, isSearching, allEntries]);
 
     // Entries shown in the register: filtered full set while searching, otherwise
-    // the paginated window.
-    const displayEntries = isSearching ? filterRegisterEntries(allEntries ?? [], search) : entries;
+    // the paginated window. Memoized so the filter only re-runs when inputs change.
+    const displayEntries = useMemo(
+        () => (isSearching ? filterRegisterEntries(allEntries ?? [], debouncedSearch) : entries),
+        [isSearching, allEntries, debouncedSearch, entries],
+    );
 
     if (loading) {
         return <div className="loading"><div className="loading-spinner" />{t('common.loading')}</div>;
@@ -238,11 +255,11 @@ export default function AccountRegister() {
                         onChange={e => setSearch(e.target.value)}
                         aria-label={t('register.searchPlaceholder')}
                     />
-                    {isSearching && (
+                    {search !== '' && (
                         <button
                             type="button"
                             className="register-search-clear"
-                            onClick={() => setSearch('')}
+                            onClick={clearSearch}
                             title={t('register.searchClear')}
                             aria-label={t('register.searchClear')}
                         >

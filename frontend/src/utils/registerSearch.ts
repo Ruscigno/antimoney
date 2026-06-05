@@ -23,6 +23,17 @@ function entryHaystack(entry: RegisterEntry): string {
         .toLowerCase();
 }
 
+/** Split a query into lowercase, whitespace-separated tokens. */
+function tokenize(query: string): string[] {
+    return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matchesTokens(entry: RegisterEntry, tokens: string[]): boolean {
+    if (tokens.length === 0) return true;
+    const haystack = entryHaystack(entry);
+    return tokens.every(token => haystack.includes(token));
+}
+
 /**
  * Returns true when every whitespace-separated token in `query` appears
  * somewhere in the entry (case-insensitive substring / partial match).
@@ -30,17 +41,16 @@ function entryHaystack(entry: RegisterEntry): string {
  * text contains both words in any order. An empty query matches everything.
  */
 export function entryMatchesQuery(entry: RegisterEntry, query: string): boolean {
-    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return true;
-    const haystack = entryHaystack(entry);
-    return tokens.every(token => haystack.includes(token));
+    return matchesTokens(entry, tokenize(query));
 }
 
 /**
  * Filter register entries by a partial-match search query. Returns the input
- * array unchanged when the query is empty (or whitespace only).
+ * array unchanged when the query is empty (or whitespace only). The query is
+ * tokenized once, not per entry.
  */
 export function filterRegisterEntries(entries: RegisterEntry[], query: string): RegisterEntry[] {
-    if (query.trim() === '') return entries;
-    return entries.filter(entry => entryMatchesQuery(entry, query));
+    const tokens = tokenize(query);
+    if (tokens.length === 0) return entries;
+    return entries.filter(entry => matchesTokens(entry, tokens));
 }

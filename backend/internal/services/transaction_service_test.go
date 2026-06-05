@@ -112,6 +112,57 @@ func TestTransactionService(t *testing.T) {
 		t.Fatalf("Expected register entries")
 	}
 
+	// Direct transfer: the asset register's transfer column should resolve to
+	// the single other account in the balanced transaction (batched lookup).
+	if got := reg[0].TransferAccount; got != "Test Expense" {
+		t.Fatalf("expected transfer account 'Test Expense', got %q", got)
+	}
+	if got := reg[0].TransferAccountGUID; got != expenseAcc.GUID {
+		t.Fatalf("expected transfer account guid %s, got %s", expenseAcc.GUID, got)
+	}
+
+	// Split transaction (3 splits): the transfer column should resolve to the
+	// "-- Split Transaction --" sentinel with an empty guid.
+	expense2, err := accSvc.CreateAccount(ctx, CreateAccountRequest{
+		Name:        "Test Expense 2",
+		AccountType: models.AccountTypeExpense,
+		Description: desc,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create second expense account: %v", err)
+	}
+	_, err = txSvc.CreateTransaction(ctx, CreateTransactionRequest{
+		PostDate:    now,
+		Description: "Split Purchase",
+		Splits: []CreateSplitRequest{
+			{AccountGUID: assetAcc.GUID, ValueNum: -300, ValueDenom: 100, QuantityNum: -300, QuantityDenom: 100},
+			{AccountGUID: expenseAcc.GUID, ValueNum: 100, ValueDenom: 100, QuantityNum: 100, QuantityDenom: 100},
+			{AccountGUID: expense2.GUID, ValueNum: 200, ValueDenom: 100, QuantityNum: 200, QuantityDenom: 100},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTransaction (split) failed: %v", err)
+	}
+	reg2, err := txSvc.GetAccountRegister(ctx, assetAcc.GUID)
+	if err != nil {
+		t.Fatalf("GetAccountRegister (split) failed: %v", err)
+	}
+	var foundSplit bool
+	for _, e := range reg2 {
+		if e.Description == "Split Purchase" {
+			foundSplit = true
+			if e.TransferAccount != "-- Split Transaction --" {
+				t.Fatalf("expected split transaction label, got %q", e.TransferAccount)
+			}
+			if e.TransferAccountGUID != "" {
+				t.Fatalf("expected empty transfer guid for split, got %q", e.TransferAccountGUID)
+			}
+		}
+	}
+	if !foundSplit {
+		t.Fatalf("split transaction not found in register")
+	}
+
 	// Test Unbalanced Transaction (auto-balancing)
 	req2 := CreateTransactionRequest{
 		PostDate:    now,
