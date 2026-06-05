@@ -680,6 +680,51 @@ a:hover {
   gap: 12px;
 }
 
+/* Register search bar */
+.register-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.register-search-input-wrap {
+  position: relative;
+  flex: 1 1 240px;
+  max-width: 420px;
+}
+
+.register-search-input {
+  padding-right: 34px;
+}
+
+.register-search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast);
+}
+
+.register-search-clear:hover {
+  color: var(--text-primary);
+}
+
+.register-search-count {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
 .form-actions {
   display: flex;
   gap: 10px;
