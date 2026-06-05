@@ -300,3 +300,95 @@ test.describe.serial('Antimoney E2E', () => {
         await expect(page.locator('text=Passivos').first()).toBeVisible();
     });
 });
+
+// ──────────────────────────────────────────────
+// Register search — self-contained: registers its own user, seeds two
+// transactions via the API, and authenticates via the auth_token cookie.
+// Independent of the suite above so it stands on its own.
+// ──────────────────────────────────────────────
+interface ApiAccount {
+    guid: string;
+    name: string;
+    account_type: string;
+    placeholder: boolean;
+}
+
+test.describe.serial('Register search E2E', () => {
+    let token = '';
+    let checkingGuid = '';
+
+    const balancedSplits = (debit: string, credit: string, cents: number) => [
+        { account_guid: debit, memo: '', value_num: cents, value_denom: 100, quantity_num: cents, quantity_denom: 100 },
+        { account_guid: credit, memo: '', value_num: -cents, value_denom: 100, quantity_num: -cents, quantity_denom: 100 },
+    ];
+
+    test.beforeAll(async ({ request }) => {
+        const reg = await request.post(`${BASE}/auth/register`, {
+            data: { email: `search-${Date.now()}@example.com`, password: 'Password1', name: 'Search' },
+        });
+        token = (await reg.json()).token;
+        const headers = { Cookie: `auth_token=${token}` };
+
+        const accountsRes = await request.get(`${BASE}/api/accounts`, { headers });
+        const accounts: ApiAccount[] = await accountsRes.json();
+        const checking = accounts.find(a => a.name === 'Conta Corrente');
+        if (!checking) throw new Error('Seed account "Conta Corrente" not found — check seed data');
+        const income = accounts.find(a => a.account_type === 'INCOME' && !a.placeholder);
+        if (!income) throw new Error('No non-placeholder INCOME account found in seed data');
+        checkingGuid = checking.guid;
+
+        // Two transactions with distinct descriptions and amounts so search can narrow.
+        await request.post(`${BASE}/api/transactions`, {
+            headers,
+            data: { custom_id: '', post_date: '2025-10-01T11:00:00Z', description: 'Acme Salary Payment', splits: balancedSplits(checking.guid, income.guid, 500000) },
+        });
+        await request.post(`${BASE}/api/transactions`, {
+            headers,
+            data: { custom_id: '', post_date: '2025-10-02T11:00:00Z', description: 'Tangerine Grocery Run', splits: balancedSplits(checking.guid, income.guid, 25000) },
+        });
+    });
+
+    test.beforeEach(async ({ page }) => {
+        // The app reads the JWT from the HttpOnly auth_token cookie.
+        await page.context().addCookies([{ name: 'auth_token', value: token, url: BASE }]);
+    });
+
+    test('filters the register by partial text, shows a count, and clears', async ({ page }) => {
+        await page.goto(`${BASE}/accounts/${checkingGuid}`);
+        await page.waitForSelector('.register-table');
+
+        const searchInput = page.locator('.register-search-input');
+        await expect(searchInput).toBeVisible();
+
+        // Partial, case-insensitive match narrows to the matching row only.
+        await searchInput.fill('acme');
+        await expect(page.locator('.register-table td.col-description', { hasText: 'Acme Salary Payment' })).toBeVisible();
+        await expect(page.locator('.register-table td.col-description', { hasText: 'Tangerine Grocery Run' })).toHaveCount(0);
+        await expect(page.locator('.register-search-count')).toBeVisible();
+
+        // A non-matching query shows the "no match" state and hides the table.
+        await searchInput.fill('zzz-nonexistent-zzz');
+        await expect(page.locator('.register-search-count')).toContainText('No transactions match');
+        await expect(page.locator('.register-table')).toHaveCount(0);
+
+        // Clearing via the × button restores the full register.
+        await page.locator('.register-search-clear').click();
+        await expect(searchInput).toHaveValue('');
+        await expect(page.locator('.register-table td.col-description', { hasText: 'Tangerine Grocery Run' })).toBeVisible();
+    });
+
+    test('matches case-insensitively and by amount', async ({ page }) => {
+        await page.goto(`${BASE}/accounts/${checkingGuid}`);
+        await page.waitForSelector('.register-table');
+        const searchInput = page.locator('.register-search-input');
+
+        // Uppercase query matches lowercase content.
+        await searchInput.fill('TANGERINE');
+        await expect(page.locator('.register-table td.col-description', { hasText: 'Tangerine Grocery Run' })).toBeVisible();
+        await expect(page.locator('.register-table td.col-description', { hasText: 'Acme Salary Payment' })).toHaveCount(0);
+
+        // Typing the amount finds the salary (5000.00).
+        await searchInput.fill('5000');
+        await expect(page.locator('.register-table td.col-description', { hasText: 'Acme Salary Payment' })).toBeVisible();
+    });
+});

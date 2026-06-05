@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { getAccount, getAccountRegisterPaged, deleteTransaction, getAccounts } from '../api/client';
+import { getAccount, getAccountRegister, getAccountRegisterPaged, deleteTransaction, getAccounts } from '../api/client';
 import Register from '../components/Register';
 import TransactionForm from '../components/TransactionForm';
 import ReconcileWizard from '../components/ReconcileWizard';
@@ -8,6 +8,8 @@ import AccountBreadcrumbs from '../components/AccountBreadcrumbs';
 import type { Account, RegisterEntry } from '../types';
 import { t } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
+import { filterRegisterEntries } from '../utils/registerSearch';
+import { compareEntries } from '../utils/registerSort';
 
 const PAGE_SIZE = 50;
 
@@ -39,6 +41,24 @@ export default function AccountRegister() {
     const [hasBefore, setHasBefore] = useState(false);
     const [hasAfter, setHasAfter] = useState(false);
 
+    // Search filters across ALL of the account's transactions (not just the loaded
+    // page). When a query is active we lazily fetch the full register once and
+    // filter it client-side, preserving the server-computed running balances.
+    // `search` tracks the input for instant feedback; `debouncedSearch` (200ms)
+    // drives the actual fetch + filtering so typing stays smooth on large accounts.
+    const [search, setSearch] = useState('');
+    const [debouncedSearch, setDebouncedSearch] = useState('');
+    const [allEntries, setAllEntries] = useState<RegisterEntry[] | null>(null);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [searchError, setSearchError] = useState<string | null>(null);
+    const isSearching = debouncedSearch.trim() !== '';
+
+    const clearSearch = useCallback(() => {
+        setSearch('');
+        setDebouncedSearch('');
+        setSearchError(null);
+    }, []);
+
     const firstOffsetRef = useRef<number | null>(null);
     const lastOffsetRef = useRef<number | null>(null);
     // Track the cursor date used for the current page so refreshes stay centred on the same date
@@ -57,13 +77,7 @@ export default function AccountRegister() {
             .then(([acc, page, all]) => {
                 setAccount(acc);
                 setAllAccounts(all);
-                const sorted = (page.entries || []).sort((a, b) => {
-                    if (a.post_date < b.post_date) return -1;
-                    if (a.post_date > b.post_date) return 1;
-                    const idA = a.custom_id || '';
-                    const idB = b.custom_id || '';
-                    return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
-                });
+                const sorted = (page.entries || []).sort(compareEntries);
                 setEntries(sorted);
                 setHasBefore(page.has_before);
                 setHasAfter(page.has_after);
@@ -103,13 +117,7 @@ export default function AccountRegister() {
                     : [...prev, ...unique];
 
                 // Sort to be safe
-                merged.sort((a, b) => {
-                    if (a.post_date < b.post_date) return -1;
-                    if (a.post_date > b.post_date) return 1;
-                    const idA = a.custom_id || '';
-                    const idB = b.custom_id || '';
-                    return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
-                });
+                merged.sort(compareEntries);
 
                 return merged;
             });
@@ -130,11 +138,11 @@ export default function AccountRegister() {
 
     // Handle reconcile state change locally without reloading
     const handleReconcileStateChanged = useCallback((splitGuid: string, newState: string) => {
-        setEntries(prev => prev.map(entry =>
-            entry.split_guid === splitGuid
-                ? { ...entry, reconcile_state: newState }
-                : entry
-        ));
+        const patch = (entry: RegisterEntry) =>
+            entry.split_guid === splitGuid ? { ...entry, reconcile_state: newState } : entry;
+        setEntries(prev => prev.map(patch));
+        // Keep the search cache (if loaded) in sync so toggles show while filtering
+        setAllEntries(prev => (prev ? prev.map(patch) : prev));
     }, []);
 
     // Refresh around the same cursor date that was loaded (preserves scroll position)
@@ -142,8 +150,10 @@ export default function AccountRegister() {
         loadInitialData(pageCursorRef.current);
     }, [loadInitialData]);
 
-    // Full reload (after creating/editing/deleting transactions or finishing reconcile wizard)
+    // Full reload (after creating/editing/deleting transactions or finishing reconcile wizard).
+    // Invalidate the search cache so an active filter refetches the latest data.
     const handleDataChanged = useCallback(() => {
+        setAllEntries(null);
         refreshCurrentPage();
     }, [refreshCurrentPage]);
 
@@ -161,8 +171,46 @@ export default function AccountRegister() {
         // kept in sync on every render, but intentionally not in deps so we only
         // reload when the account id changes, not on every location change.
         loadInitialData(jumpCursorDateRef.current);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [loadInitialData]);
+
+    // Debounce the search input so filtering/fetching doesn't run on every keystroke.
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearch(search), 200);
+        return () => clearTimeout(timer);
+    }, [search]);
+
+    // Reset the search when navigating to a different account.
+    useEffect(() => {
+        setSearch('');
+        setDebouncedSearch('');
+        setAllEntries(null);
+        setSearchError(null);
+    }, [id]);
+
+    // Lazily fetch the full register the first time a search is active (or after
+    // the cache is invalidated by a data change). Fetched once, then filtered
+    // in-memory as the user keeps typing.
+    useEffect(() => {
+        if (!id || !isSearching || allEntries !== null) return;
+        let cancelled = false;
+        setSearchLoading(true);
+        setSearchError(null);
+        getAccountRegister(id)
+            .then(all => { if (!cancelled) setAllEntries((all || []).sort(compareEntries)); })
+            .catch(err => {
+                if (!cancelled) setSearchError(t('register.searchError'));
+                console.error(err);
+            })
+            .finally(() => { if (!cancelled) setSearchLoading(false); });
+        return () => { cancelled = true; };
+    }, [id, isSearching, allEntries]);
+
+    // Entries shown in the register: filtered full set while searching, otherwise
+    // the paginated window. Memoized so the filter only re-runs when inputs change.
+    const displayEntries = useMemo(
+        () => (isSearching ? filterRegisterEntries(allEntries ?? [], debouncedSearch) : entries),
+        [isSearching, allEntries, debouncedSearch, entries],
+    );
 
     if (loading) {
         return <div className="loading"><div className="loading-spinner" />{t('common.loading')}</div>;
@@ -195,20 +243,60 @@ export default function AccountRegister() {
                 </div>
             </div>
 
-            <Register
-                entries={entries}
-                accountName={account.name}
-                accountType={account.account_type}
-                scrollTargetDate={jumpCursorDate}
-                onReconcileStateChanged={handleReconcileStateChanged}
-                onEditTransaction={setEditTxGuid}
-                onDuplicateTransaction={setDuplicateTxGuid}
-                onDeleteTransaction={handleDeleteTransaction}
-                hasBefore={hasBefore}
-                hasAfter={hasAfter}
-                onLoadMore={loadMore}
-                loadingMore={loadingMore}
-            />
+            <div className="register-search-bar">
+                <div className="register-search-input-wrap">
+                    <input
+                        type="text"
+                        className="form-input register-search-input"
+                        placeholder={t('register.searchPlaceholder')}
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        aria-label={t('register.searchPlaceholder')}
+                    />
+                    {search !== '' && (
+                        <button
+                            type="button"
+                            className="register-search-clear"
+                            onClick={clearSearch}
+                            title={t('register.searchClear')}
+                            aria-label={t('register.searchClear')}
+                        >
+                            ×
+                        </button>
+                    )}
+                </div>
+                {isSearching && searchError && (
+                    <span className="register-search-error" role="alert">{searchError}</span>
+                )}
+                {isSearching && !searchLoading && !searchError && (
+                    <span className="register-search-count">
+                        {displayEntries.length === 0
+                            ? t('register.searchNoMatch')
+                            : t('register.searchResults')
+                                .replace('{{count}}', String(displayEntries.length))
+                                .replace('{{total}}', String(allEntries?.length ?? 0))}
+                    </span>
+                )}
+            </div>
+
+            {isSearching && searchLoading && allEntries === null ? (
+                <div className="loading"><div className="loading-spinner" />{t('common.loading')}</div>
+            ) : isSearching && displayEntries.length === 0 ? null : (
+                <Register
+                    entries={displayEntries}
+                    accountName={account.name}
+                    accountType={account.account_type}
+                    scrollTargetDate={isSearching ? undefined : jumpCursorDate}
+                    onReconcileStateChanged={handleReconcileStateChanged}
+                    onEditTransaction={setEditTxGuid}
+                    onDuplicateTransaction={setDuplicateTxGuid}
+                    onDeleteTransaction={handleDeleteTransaction}
+                    hasBefore={isSearching ? false : hasBefore}
+                    hasAfter={isSearching ? false : hasAfter}
+                    onLoadMore={isSearching ? undefined : loadMore}
+                    loadingMore={isSearching ? false : loadingMore}
+                />
+            )}
 
             {(showForm || editTxGuid || duplicateTxGuid) && (
                 <TransactionForm

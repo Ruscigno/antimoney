@@ -102,6 +102,11 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.jump': 'Jump to account',
         'register.loadOlder': 'Load older transactions',
         'register.loadNewer': 'Load newer transactions',
+        'register.searchPlaceholder': 'Search transactions…',
+        'register.searchClear': 'Clear search',
+        'register.searchResults': '{{count}} of {{total}} transactions match',
+        'register.searchNoMatch': 'No transactions match',
+        'register.searchError': 'Could not load transactions for search. Please try again.',
 
         // Reconcile wizard
         'reconcile.title': 'Reconcile',
@@ -333,6 +338,11 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.jump': 'Ir para conta',
         'register.loadOlder': 'Carregar transações anteriores',
         'register.loadNewer': 'Carregar transações recentes',
+        'register.searchPlaceholder': 'Buscar transações…',
+        'register.searchClear': 'Limpar busca',
+        'register.searchResults': '{{count}} de {{total}} transações correspondem',
+        'register.searchNoMatch': 'Nenhuma transação corresponde',
+        'register.searchError': 'Não foi possível carregar as transações para busca. Tente novamente.',
 
         // Reconcile wizard
         'reconcile.title': 'Reconciliar',

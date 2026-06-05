@@ -112,6 +112,82 @@ func TestTransactionService(t *testing.T) {
 		t.Fatalf("Expected register entries")
 	}
 
+	// Direct transfer: the asset register's transfer column should resolve to
+	// the single other account in the balanced transaction (batched lookup).
+	if got := reg[0].TransferAccount; got != "Test Expense" {
+		t.Fatalf("expected transfer account 'Test Expense', got %q", got)
+	}
+	if got := reg[0].TransferAccountGUID; got != expenseAcc.GUID {
+		t.Fatalf("expected transfer account guid %s, got %s", expenseAcc.GUID, got)
+	}
+
+	// Split transaction (3 splits): the transfer column should resolve to the
+	// "-- Split Transaction --" sentinel with an empty guid.
+	expense2, err := accSvc.CreateAccount(ctx, CreateAccountRequest{
+		Name:        "Test Expense 2",
+		AccountType: models.AccountTypeExpense,
+		Description: desc,
+	})
+	if err != nil {
+		t.Fatalf("Failed to create second expense account: %v", err)
+	}
+	_, err = txSvc.CreateTransaction(ctx, CreateTransactionRequest{
+		PostDate:    now,
+		Description: "Split Purchase",
+		Splits: []CreateSplitRequest{
+			{AccountGUID: assetAcc.GUID, ValueNum: -300, ValueDenom: 100, QuantityNum: -300, QuantityDenom: 100},
+			{AccountGUID: expenseAcc.GUID, ValueNum: 100, ValueDenom: 100, QuantityNum: 100, QuantityDenom: 100},
+			{AccountGUID: expense2.GUID, ValueNum: 200, ValueDenom: 100, QuantityNum: 200, QuantityDenom: 100},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateTransaction (split) failed: %v", err)
+	}
+	reg2, err := txSvc.GetAccountRegister(ctx, assetAcc.GUID)
+	if err != nil {
+		t.Fatalf("GetAccountRegister (split) failed: %v", err)
+	}
+	var foundSplit bool
+	for _, e := range reg2 {
+		if e.Description == "Split Purchase" {
+			foundSplit = true
+			if e.TransferAccount != splitTransactionLabel {
+				t.Fatalf("expected split transaction label, got %q", e.TransferAccount)
+			}
+			if e.TransferAccountGUID != "" {
+				t.Fatalf("expected empty transfer guid for split, got %q", e.TransferAccountGUID)
+			}
+		}
+	}
+	if !foundSplit {
+		t.Fatalf("split transaction not found in register")
+	}
+
+	// Same batched transfer-account resolution, but through the PAGINATED path
+	// (GetAccountRegisterPaged) — covers both the direct-transfer and split cases.
+	page, err := txSvc.GetAccountRegisterPaged(ctx, assetAcc.GUID, now.Format("2006-01-02"), "around", 50)
+	if err != nil {
+		t.Fatalf("GetAccountRegisterPaged failed: %v", err)
+	}
+	var pagedDirect, pagedSplit bool
+	for _, e := range page.Entries {
+		switch e.Description {
+		case "New Supplies":
+			pagedDirect = true
+			if e.TransferAccount != "Test Expense" || e.TransferAccountGUID != expenseAcc.GUID {
+				t.Fatalf("paged: expected direct transfer to Test Expense, got %q/%q", e.TransferAccount, e.TransferAccountGUID)
+			}
+		case "Split Purchase":
+			pagedSplit = true
+			if e.TransferAccount != splitTransactionLabel || e.TransferAccountGUID != "" {
+				t.Fatalf("paged: expected split label, got %q/%q", e.TransferAccount, e.TransferAccountGUID)
+			}
+		}
+	}
+	if !pagedDirect || !pagedSplit {
+		t.Fatalf("paged register missing expected entries (direct=%v split=%v)", pagedDirect, pagedSplit)
+	}
+
 	// Test Unbalanced Transaction (auto-balancing)
 	req2 := CreateTransactionRequest{
 		PostDate:    now,
