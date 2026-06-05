@@ -17,6 +17,13 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
+# Pin every gcloud command to the target project regardless of the user's
+# currently-active gcloud config (which may point at an unrelated project).
+# Without this, project-less commands below (builds submit, compute instances)
+# resolve to the active config and the deploy fails. Explicit --project flags
+# still take precedence over this.
+export CLOUDSDK_CORE_PROJECT="$PROJECT_ID"
+
 export REGION="us-central1"
 export REPO_URL="us-central1-docker.pkg.dev/$PROJECT_ID/antimoney-repo"
 
