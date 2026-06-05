@@ -831,12 +831,9 @@ func (s *TransactionService) getTransferAccountsBatch(ctx context.Context, txGUI
 		return nil, err
 	}
 
-	seen := make(map[string]bool, len(txGUIDs))
+	// txGUIDs is already de-duplicated by fillTransferAccounts; assigning the
+	// same key twice would be harmless anyway, so no local dedup set is needed.
 	for _, g := range txGUIDs {
-		if seen[g] {
-			continue
-		}
-		seen[g] = true
 		if counts[g] == 1 {
 			result[g] = firstMatch[g]
 		} else {

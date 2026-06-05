@@ -151,7 +151,7 @@ func TestTransactionService(t *testing.T) {
 	for _, e := range reg2 {
 		if e.Description == "Split Purchase" {
 			foundSplit = true
-			if e.TransferAccount != "-- Split Transaction --" {
+			if e.TransferAccount != splitTransactionLabel {
 				t.Fatalf("expected split transaction label, got %q", e.TransferAccount)
 			}
 			if e.TransferAccountGUID != "" {
@@ -161,6 +161,31 @@ func TestTransactionService(t *testing.T) {
 	}
 	if !foundSplit {
 		t.Fatalf("split transaction not found in register")
+	}
+
+	// Same batched transfer-account resolution, but through the PAGINATED path
+	// (GetAccountRegisterPaged) — covers both the direct-transfer and split cases.
+	page, err := txSvc.GetAccountRegisterPaged(ctx, assetAcc.GUID, now.Format("2006-01-02"), "around", 50)
+	if err != nil {
+		t.Fatalf("GetAccountRegisterPaged failed: %v", err)
+	}
+	var pagedDirect, pagedSplit bool
+	for _, e := range page.Entries {
+		switch e.Description {
+		case "New Supplies":
+			pagedDirect = true
+			if e.TransferAccount != "Test Expense" || e.TransferAccountGUID != expenseAcc.GUID {
+				t.Fatalf("paged: expected direct transfer to Test Expense, got %q/%q", e.TransferAccount, e.TransferAccountGUID)
+			}
+		case "Split Purchase":
+			pagedSplit = true
+			if e.TransferAccount != splitTransactionLabel || e.TransferAccountGUID != "" {
+				t.Fatalf("paged: expected split label, got %q/%q", e.TransferAccount, e.TransferAccountGUID)
+			}
+		}
+	}
+	if !pagedDirect || !pagedSplit {
+		t.Fatalf("paged register missing expected entries (direct=%v split=%v)", pagedDirect, pagedSplit)
 	}
 
 	// Test Unbalanced Transaction (auto-balancing)

@@ -9,18 +9,9 @@ import type { Account, RegisterEntry } from '../types';
 import { t } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
 import { filterRegisterEntries } from '../utils/registerSearch';
+import { compareEntries } from '../utils/registerSort';
 
 const PAGE_SIZE = 50;
-
-// Sort register entries oldest → newest (ties broken by the numeric custom id)
-// so the full-register search results match the paginated display order.
-function compareEntries(a: RegisterEntry, b: RegisterEntry): number {
-    if (a.post_date < b.post_date) return -1;
-    if (a.post_date > b.post_date) return 1;
-    const idA = a.custom_id || '';
-    const idB = b.custom_id || '';
-    return idA.localeCompare(idB, undefined, { numeric: true, sensitivity: 'base' });
-}
 
 function getTodayStr(): string {
     const now = new Date();
@@ -59,11 +50,13 @@ export default function AccountRegister() {
     const [debouncedSearch, setDebouncedSearch] = useState('');
     const [allEntries, setAllEntries] = useState<RegisterEntry[] | null>(null);
     const [searchLoading, setSearchLoading] = useState(false);
+    const [searchError, setSearchError] = useState<string | null>(null);
     const isSearching = debouncedSearch.trim() !== '';
 
     const clearSearch = useCallback(() => {
         setSearch('');
         setDebouncedSearch('');
+        setSearchError(null);
     }, []);
 
     const firstOffsetRef = useRef<number | null>(null);
@@ -191,6 +184,7 @@ export default function AccountRegister() {
         setSearch('');
         setDebouncedSearch('');
         setAllEntries(null);
+        setSearchError(null);
     }, [id]);
 
     // Lazily fetch the full register the first time a search is active (or after
@@ -200,9 +194,13 @@ export default function AccountRegister() {
         if (!id || !isSearching || allEntries !== null) return;
         let cancelled = false;
         setSearchLoading(true);
+        setSearchError(null);
         getAccountRegister(id)
             .then(all => { if (!cancelled) setAllEntries((all || []).sort(compareEntries)); })
-            .catch(console.error)
+            .catch(err => {
+                if (!cancelled) setSearchError(t('register.searchError'));
+                console.error(err);
+            })
             .finally(() => { if (!cancelled) setSearchLoading(false); });
         return () => { cancelled = true; };
     }, [id, isSearching, allEntries]);
@@ -267,7 +265,10 @@ export default function AccountRegister() {
                         </button>
                     )}
                 </div>
-                {isSearching && !searchLoading && (
+                {isSearching && searchError && (
+                    <span className="register-search-error" role="alert">{searchError}</span>
+                )}
+                {isSearching && !searchLoading && !searchError && (
                     <span className="register-search-count">
                         {displayEntries.length === 0
                             ? t('register.searchNoMatch')

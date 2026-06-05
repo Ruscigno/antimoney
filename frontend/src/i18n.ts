@@ -106,6 +106,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.searchClear': 'Clear search',
         'register.searchResults': '{{count}} of {{total}} transactions match',
         'register.searchNoMatch': 'No transactions match',
+        'register.searchError': 'Could not load transactions for search. Please try again.',
 
         // Reconcile wizard
         'reconcile.title': 'Reconcile',
@@ -341,6 +342,7 @@ const translations: Record<Locale, Record<string, string>> = {
         'register.searchClear': 'Limpar busca',
         'register.searchResults': '{{count}} de {{total}} transações correspondem',
         'register.searchNoMatch': 'Nenhuma transação corresponde',
+        'register.searchError': 'Não foi possível carregar as transações para busca. Tente novamente.',
 
         // Reconcile wizard
         'reconcile.title': 'Reconciliar',

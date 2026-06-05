@@ -331,8 +331,10 @@ test.describe.serial('Register search E2E', () => {
 
         const accountsRes = await request.get(`${BASE}/api/accounts`, { headers });
         const accounts: ApiAccount[] = await accountsRes.json();
-        const checking = accounts.find(a => a.name === 'Conta Corrente')!;
-        const income = accounts.find(a => a.account_type === 'INCOME' && !a.placeholder)!;
+        const checking = accounts.find(a => a.name === 'Conta Corrente');
+        if (!checking) throw new Error('Seed account "Conta Corrente" not found — check seed data');
+        const income = accounts.find(a => a.account_type === 'INCOME' && !a.placeholder);
+        if (!income) throw new Error('No non-placeholder INCOME account found in seed data');
         checkingGuid = checking.guid;
 
         // Two transactions with distinct descriptions and amounts so search can narrow.

@@ -725,6 +725,11 @@ a:hover {
   white-space: nowrap;
 }
 
+.register-search-error {
+  color: var(--color-expense);
+  font-size: 0.85rem;
+}
+
 .form-actions {
   display: flex;
   gap: 10px;
