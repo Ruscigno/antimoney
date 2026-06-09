@@ -385,7 +385,7 @@ export default function AccountRegister() {
                         setImportSuggestions(null);
                         setSyncMessage(t('plaid.importSuccess').replace('{{count}}', String(count)));
                         setTimeout(() => setSyncMessage(null), 4000);
-                        window.location.reload();
+                        handleDataChanged();
                     }}
                 />
             )}
