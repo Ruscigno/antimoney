@@ -59,12 +59,18 @@ func TestPlaidExchangeAndSync(t *testing.T) {
 
 	accSvc := services.NewAccountService(db.Pool)
 	ctx := context.WithValue(context.Background(), auth.BookGUIDKey, bookGUID)
-	bankAcc, _ := accSvc.CreateAccount(ctx, services.CreateAccountRequest{
+	bankAcc, err := accSvc.CreateAccount(ctx, services.CreateAccountRequest{
 		Name: "Chequing", AccountType: models.AccountTypeBank,
 	})
-	expAcc, _ := accSvc.CreateAccount(ctx, services.CreateAccountRequest{
+	if err != nil {
+		t.Fatal(err)
+	}
+	expAcc, err := accSvc.CreateAccount(ctx, services.CreateAccountRequest{
 		Name: "Food", AccountType: models.AccountTypeExpense,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// POST /exchange
 	w := httptest.NewRecorder()
@@ -135,7 +141,10 @@ func TestPlaidIsolation(t *testing.T) {
 	defer db.Teardown(context.Background())
 
 	authSvc := auth.NewUserService(db.Pool)
-	resB, _ := authSvc.Register(context.Background(), auth.RegisterRequest{Email: "b@test.com", Password: "pass", Name: "B"})
+	resB, err := authSvc.Register(context.Background(), auth.RegisterRequest{Email: "b@test.com", Password: "pass", Name: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Exchange under user A
 	w := httptest.NewRecorder()
