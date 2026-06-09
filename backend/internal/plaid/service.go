@@ -131,13 +131,15 @@ func (s *PlaidService) LinkAccounts(ctx context.Context, itemGUID string, mappin
 
 	for _, m := range mappings {
 		var count int
-		tx.QueryRow(ctx,
+		if err := tx.QueryRow(ctx,
 			`SELECT COUNT(*) FROM accounts
 			 WHERE book_guid = $1
 			   AND metadata->'plaid'->>'account_id' = $2
 			   AND guid != $3`,
 			bookGUID, m.PlaidAccountID, m.AccountGUID,
-		).Scan(&count)
+		).Scan(&count); err != nil {
+			return err
+		}
 		if count > 0 {
 			return ErrDuplicateLink
 		}
@@ -226,19 +228,23 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	}
 
 	now := time.Now().UTC()
-	s.pool.Exec(ctx,
+	if _, err := s.pool.Exec(ctx,
 		`UPDATE plaid_items
 		 SET sync_cursor = $1, last_synced_at = $2, updated_at = $2, version = version + 1
 		 WHERE guid = $3 AND book_guid = $4`,
 		cursor, now, itemGUID, bookGUID,
-	)
-	s.pool.Exec(ctx,
+	); err != nil {
+		log.Printf("plaid sync: persist cursor: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx,
 		`UPDATE accounts
 		 SET metadata = jsonb_set(COALESCE(metadata,'{}'), '{plaid,last_synced_at}', to_jsonb($1::text), true),
 		     updated_at = $2
 		 WHERE book_guid = $3 AND metadata->'plaid'->>'item_guid' = $4`,
 		now.Format(time.RFC3339), now, bookGUID, itemGUID,
-	)
+	); err != nil {
+		log.Printf("plaid sync: propagate last_synced_at: %v", err)
+	}
 
 	bankAccountByPlaidID := make(map[string]struct{ GUID, Name string })
 	rows, _ := s.pool.Query(ctx,
