@@ -262,6 +262,13 @@ const translations: Record<Locale, Record<string, string>> = {
         'plaid.importSuccess': '{{count}} transaction(s) imported.',
         'plaid.importError': 'Import failed — please try again.',
         'plaid.reconnectNeeded': 'Bank connection needs re-authorization. Please disconnect and reconnect.',
+        'plaid.cancel': 'Cancel',
+        'plaid.colDate': 'Date',
+        'plaid.colDescription': 'Description',
+        'plaid.colAmount': 'Amount',
+        'plaid.colBankAccount': 'Bank Account',
+        'plaid.colCategory': 'Category',
+        'plaid.colInclude': 'Include',
     },
     'pt-BR': {
         'nav.main': 'Principal',
@@ -504,6 +511,13 @@ const translations: Record<Locale, Record<string, string>> = {
         'plaid.importSuccess': '{{count}} transação(ões) importada(s).',
         'plaid.importError': 'Importação falhou — tente novamente.',
         'plaid.reconnectNeeded': 'A conexão bancária precisa de reautorização. Desconecte e reconecte.',
+        'plaid.cancel': 'Cancelar',
+        'plaid.colDate': 'Data',
+        'plaid.colDescription': 'Descrição',
+        'plaid.colAmount': 'Valor',
+        'plaid.colBankAccount': 'Conta bancária',
+        'plaid.colCategory': 'Categoria',
+        'plaid.colInclude': 'Incluir',
     },
 };
 

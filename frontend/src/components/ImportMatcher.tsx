@@ -91,12 +91,12 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                         <thead>
                             <tr>
-                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Date</th>
-                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Description</th>
-                                <th style={{ textAlign: 'right', padding: '4px 8px' }}>Amount</th>
-                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Bank Account</th>
-                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>Category</th>
-                                <th style={{ textAlign: 'center', padding: '4px 8px' }}>Include</th>
+                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colDate')}</th>
+                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colDescription')}</th>
+                                <th style={{ textAlign: 'right', padding: '4px 8px' }}>{t('plaid.colAmount')}</th>
+                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colBankAccount')}</th>
+                                <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colCategory')}</th>
+                                <th style={{ textAlign: 'center', padding: '4px 8px' }}>{t('plaid.colInclude')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -135,7 +135,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                 </div>
                 <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', padding: '1rem' }}>
                     <button className="btn btn-secondary" onClick={onClose} disabled={importing}>
-                        Cancel
+                        {t('plaid.cancel')}
                     </button>
                     <button
                         className="btn btn-primary"
