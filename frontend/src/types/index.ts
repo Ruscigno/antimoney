@@ -131,3 +131,34 @@ export const ACCOUNT_TYPE_COLORS: Record<AccountType, string> = {
     EXPENSE: '#ec4899',
     EQUITY: '#06b6d4',
 };
+
+export interface PlaidBankAccount {
+    account_id: string;
+    name: string;
+    mask: string;
+    type: string;
+}
+
+export interface PlaidItem {
+    guid: string;
+    institution_name: string;
+    last_synced_at: string | null;
+    import_pending: boolean;
+}
+
+export interface SyncSuggestion {
+    transaction_id: string;
+    date: string;
+    description: string;
+    amount_num: number;
+    amount_denom: number;
+    bank_account_guid: string;
+    bank_account_name: string;
+    suggested_category_guid: string;
+    suggested_category_name: string;
+}
+
+export interface SyncResult {
+    count: number;
+    suggestions: SyncSuggestion[];
+}
