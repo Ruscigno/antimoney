@@ -247,19 +247,26 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	}
 
 	bankAccountByPlaidID := make(map[string]struct{ GUID, Name string })
-	rows, _ := s.pool.Query(ctx,
+	rows, err := s.pool.Query(ctx,
 		`SELECT guid, name, metadata->'plaid'->>'account_id'
 		 FROM accounts
 		 WHERE book_guid = $1 AND metadata->'plaid'->>'item_guid' = $2`,
 		bookGUID, itemGUID,
 	)
-	if rows != nil {
-		for rows.Next() {
-			var g, n, pid string
-			rows.Scan(&g, &n, &pid)
-			bankAccountByPlaidID[pid] = struct{ GUID, Name string }{g, n}
+	if err != nil {
+		return nil, fmt.Errorf("load linked accounts: %w", err)
+	}
+	for rows.Next() {
+		var g, n, pid string
+		if err := rows.Scan(&g, &n, &pid); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan linked account: %w", err)
 		}
-		rows.Close()
+		bankAccountByPlaidID[pid] = struct{ GUID, Name string }{g, n}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate linked accounts: %w", err)
 	}
 
 	suggestions := make([]SyncSuggestion, 0, len(allAdded))
@@ -271,20 +278,22 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		if !ok {
 			continue
 		}
-		var cnt int
-		s.pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM transactions
-			 WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' = $2`,
-			bookGUID, txn.TransactionID,
-		).Scan(&cnt)
-		if cnt > 0 {
+		// A DB error here must NOT be swallowed: treating it as "not a duplicate"
+		// would re-import already-imported transactions.
+		exists, err := s.transactionExists(ctx, bookGUID, txn.TransactionID)
+		if err != nil {
+			return nil, fmt.Errorf("dedupe check for %s: %w", txn.TransactionID, err)
+		}
+		if exists {
 			continue
 		}
 
 		catGUID, _ := s.cat.Suggest(ctx, bookGUID, txn)
 		catName := ""
 		if catGUID != "" {
-			s.pool.QueryRow(ctx, `SELECT name FROM accounts WHERE guid = $1 AND book_guid = $2`, catGUID, bookGUID).Scan(&catName)
+			if err := s.pool.QueryRow(ctx, `SELECT name FROM accounts WHERE guid = $1 AND book_guid = $2`, catGUID, bookGUID).Scan(&catName); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				log.Printf("plaid sync: load category name for %s: %v", catGUID, err)
+			}
 		}
 
 		suggestions = append(suggestions, SyncSuggestion{
@@ -306,6 +315,20 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	return &SyncResult{Count: len(suggestions), Suggestions: suggestions}, nil
 }
 
+// transactionExists reports whether a transaction with the given Plaid id has
+// already been imported into this book (the dedupe key).
+func (s *PlaidService) transactionExists(ctx context.Context, bookGUID, plaidTxnID string) (bool, error) {
+	var cnt int
+	if err := s.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM transactions
+		 WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' = $2`,
+		bookGUID, plaidTxnID,
+	).Scan(&cnt); err != nil {
+		return false, err
+	}
+	return cnt > 0, nil
+}
+
 type ImportRow struct {
 	TransactionID       string `json:"transaction_id"`
 	BankAccountGUID     string `json:"bank_account_guid"`
@@ -323,12 +346,11 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (int, error
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 	imported := 0
 	for _, row := range rows {
-		var cnt int
-		s.pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM transactions WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' = $2`,
-			bookGUID, row.TransactionID,
-		).Scan(&cnt)
-		if cnt > 0 {
+		exists, err := s.transactionExists(ctx, bookGUID, row.TransactionID)
+		if err != nil {
+			return imported, fmt.Errorf("dedupe check for %s: %w", row.TransactionID, err)
+		}
+		if exists {
 			continue
 		}
 

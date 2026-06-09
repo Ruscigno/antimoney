@@ -3,6 +3,7 @@ package plaid
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	plaidapi "github.com/plaid/plaid-go/v26/plaid"
@@ -66,7 +67,7 @@ func (c *realPlaidClient) CreateLinkToken(ctx context.Context, userID string) (s
 	req.SetProducts([]plaidapi.Products{plaidapi.PRODUCTS_TRANSACTIONS})
 	resp, _, err := c.api.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(*req).Execute()
 	if err != nil {
-		return "", plaidErr(err)
+		return "", plaidErr("CreateLinkToken", err)
 	}
 	return resp.GetLinkToken(), nil
 }
@@ -75,7 +76,7 @@ func (c *realPlaidClient) ExchangePublicToken(ctx context.Context, publicToken s
 	req := plaidapi.NewItemPublicTokenExchangeRequest(publicToken)
 	resp, _, err := c.api.PlaidApi.ItemPublicTokenExchange(ctx).ItemPublicTokenExchangeRequest(*req).Execute()
 	if err != nil {
-		return "", "", "", plaidErr(err)
+		return "", "", "", plaidErr("ExchangePublicToken", err)
 	}
 	accessToken := resp.GetAccessToken()
 	itemID := resp.GetItemId()
@@ -104,7 +105,7 @@ func (c *realPlaidClient) GetAccounts(ctx context.Context, accessToken string) (
 	req := plaidapi.NewAccountsGetRequest(accessToken)
 	resp, _, err := c.api.PlaidApi.AccountsGet(ctx).AccountsGetRequest(*req).Execute()
 	if err != nil {
-		return nil, plaidErr(err)
+		return nil, plaidErr("GetAccounts", err)
 	}
 	out := make([]PlaidAccount, 0, len(resp.Accounts))
 	for _, a := range resp.Accounts {
@@ -125,7 +126,7 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 	}
 	resp, _, err := c.api.PlaidApi.TransactionsSync(ctx).TransactionsSyncRequest(*req).Execute()
 	if err != nil {
-		return nil, "", false, plaidErr(err)
+		return nil, "", false, plaidErr("SyncTransactions", err)
 	}
 	added := make([]PlaidTxn, 0, len(resp.Added))
 	for _, t := range resp.Added {
@@ -153,12 +154,21 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 func (c *realPlaidClient) RemoveItem(ctx context.Context, accessToken string) error {
 	req := plaidapi.NewItemRemoveRequest(accessToken)
 	_, _, err := c.api.PlaidApi.ItemRemove(ctx).ItemRemoveRequest(*req).Execute()
-	return plaidErr(err)
+	return plaidErr("RemoveItem", err)
 }
 
-func plaidErr(err error) error {
+// plaidErr logs the underlying Plaid error server-side (so production failures are
+// diagnosable) and returns a generic error for the caller. Plaid API errors carry
+// error_code / error_message / request_id — not credentials — so they are safe to
+// log; the Plaid SDK's error exposes the full response body via Body().
+func plaidErr(op string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("plaid API error (details logged server-side)")
+	if e, ok := err.(interface{ Body() []byte }); ok {
+		log.Printf("plaid %s error: %v; body=%s", op, err, e.Body())
+	} else {
+		log.Printf("plaid %s error: %v", op, err)
+	}
+	return fmt.Errorf("plaid API error during %s", op)
 }
