@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import { usePlaidLink } from 'react-plaid-link';
 import { t } from '../i18n';
-import { getAccounts } from '../api/client';
-import type { Account } from '../types';
+import { getAccounts, plaidGetLinkToken, plaidExchange, plaidLink } from '../api/client';
+import type { Account, PlaidBankAccount } from '../types';
 
 export default function DataManagement() {
     const [accounts, setAccounts] = useState<Account[]>([]);
@@ -15,6 +16,15 @@ export default function DataManagement() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const csvInputRef = useRef<HTMLInputElement>(null);
     const gnucashInputRef = useRef<HTMLInputElement>(null);
+
+    const [linkToken, setLinkToken] = useState<string | null>(null);
+    const [plaidConnecting, setPlaidConnecting] = useState(false);
+    const [plaidStep, setPlaidStep] = useState<'idle' | 'linking' | 'mapping' | 'done'>('idle');
+    const [plaidItem, setPlaidItem] = useState<{ guid: string; institution: string } | null>(null);
+    const [plaidBankAccounts, setPlaidBankAccounts] = useState<PlaidBankAccount[]>([]);
+    const [plaidMappings, setPlaidMappings] = useState<Record<string, string>>({});
+    const [plaidImportPending, setPlaidImportPending] = useState(false);
+    const [plaidMessage, setPlaidMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
     useEffect(() => {
         getAccounts().then(data => {
@@ -200,6 +210,67 @@ export default function DataManagement() {
         }
     };
 
+    const handleConnectBank = async () => {
+        setPlaidConnecting(true);
+        setPlaidMessage(null);
+        try {
+            const { link_token } = await plaidGetLinkToken();
+            setLinkToken(link_token);
+            setPlaidStep('linking');
+        } catch (e: any) {
+            setPlaidMessage({ type: 'error', text: e.message });
+        } finally {
+            setPlaidConnecting(false);
+        }
+    };
+
+    const { open: openPlaidLink, ready: plaidLinkReady } = usePlaidLink({
+        token: linkToken ?? '',
+        onSuccess: async (publicToken) => {
+            setPlaidConnecting(true);
+            setPlaidMessage(null);
+            try {
+                const result = await plaidExchange(publicToken);
+                setPlaidItem({ guid: result.item_guid, institution: result.institution_name });
+                setPlaidBankAccounts(result.accounts);
+                setPlaidMappings({});
+                setPlaidStep('mapping');
+            } catch (e: any) {
+                setPlaidMessage({ type: 'error', text: e.message });
+                setPlaidStep('idle');
+            } finally {
+                setPlaidConnecting(false);
+            }
+        },
+        onExit: () => {
+            if (plaidStep === 'linking') setPlaidStep('idle');
+        },
+    });
+
+    useEffect(() => {
+        if (plaidStep === 'linking' && plaidLinkReady && linkToken) {
+            openPlaidLink();
+        }
+    }, [plaidStep, plaidLinkReady, linkToken, openPlaidLink]);
+
+    const handleSubmitMappings = async () => {
+        if (!plaidItem) return;
+        const mappings = Object.entries(plaidMappings)
+            .filter(([, v]) => v !== '')
+            .map(([account_id, account_guid]) => ({ account_id, account_guid }));
+        setPlaidConnecting(true);
+        setPlaidMessage(null);
+        try {
+            await plaidLink(plaidItem.guid, mappings, plaidImportPending);
+            setPlaidStep('done');
+            setPlaidMessage({ type: 'success', text: `${t('plaid.connected')}: ${plaidItem.institution}` });
+        } catch (e: any) {
+            setPlaidMessage({ type: 'error', text: e.message });
+        } finally {
+            setPlaidConnecting(false);
+        }
+    };
+
     return (
         <div className="data-management">
             <div className="page-header">
@@ -304,6 +375,64 @@ export default function DataManagement() {
                     </button>
                 </div>
             </div>
+
+            {/* ─── Connect Bank ───────────────────────────────────────────── */}
+            <section className="data-section" style={{ marginTop: 24 }}>
+                <h2>{t('plaid.connectBank')}</h2>
+
+                {plaidMessage && (
+                    <div className={`message ${plaidMessage.type}`}>{plaidMessage.text}</div>
+                )}
+
+                {plaidStep === 'idle' && (
+                    <button className="btn btn-primary" onClick={handleConnectBank} disabled={plaidConnecting}>
+                        {plaidConnecting ? t('plaid.connecting') : t('plaid.connectBank')}
+                    </button>
+                )}
+
+                {plaidStep === 'mapping' && plaidItem && (
+                    <div className="plaid-mapping">
+                        <p><strong>{plaidItem.institution}</strong> — {t('plaid.mapAccounts')}</p>
+                        <table>
+                            <tbody>
+                                {plaidBankAccounts.map(ba => (
+                                    <tr key={ba.account_id}>
+                                        <td>{ba.name} (…{ba.mask})</td>
+                                        <td>
+                                            <select
+                                                value={plaidMappings[ba.account_id] ?? ''}
+                                                onChange={e => setPlaidMappings(m => ({ ...m, [ba.account_id]: e.target.value }))}
+                                            >
+                                                <option value="">{t('plaid.noMapping')}</option>
+                                                {accounts.map(a => (
+                                                    <option key={a.guid} value={a.guid}>{a.name}</option>
+                                                ))}
+                                            </select>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={plaidImportPending}
+                                onChange={e => setPlaidImportPending(e.target.checked)}
+                            />
+                            {' '}{t('plaid.importPending')}
+                        </label>
+                        <div style={{ marginTop: '1rem' }}>
+                            <button className="btn btn-primary" onClick={handleSubmitMappings} disabled={plaidConnecting}>
+                                {plaidConnecting ? t('plaid.connecting') : t('plaid.connected')}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {plaidStep === 'done' && (
+                    <p>{t('plaid.connected')} ✓</p>
+                )}
+            </section>
         </div>
     );
 }
