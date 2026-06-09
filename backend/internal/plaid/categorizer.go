@@ -2,8 +2,11 @@ package plaid
 
 import (
 	"context"
+	"errors"
+	"log"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -42,6 +45,9 @@ func (c *HistoryCategorizer) Suggest(ctx context.Context, bookGUID string, txn P
 
 	var accountGUID string
 	if err := c.pool.QueryRow(ctx, sql, bookGUID, q).Scan(&accountGUID); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			log.Printf("categorizer: unexpected DB error: %v", err)
+		}
 		return "", false
 	}
 	return accountGUID, true
