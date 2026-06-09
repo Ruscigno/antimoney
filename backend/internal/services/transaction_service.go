@@ -39,16 +39,18 @@ type CreateTransactionRequest struct {
 	CustomID    string               `json:"custom_id"`
 	PostDate    time.Time            `json:"post_date"`
 	Description string               `json:"description"`
+	Metadata    json.RawMessage      `json:"metadata,omitempty"`
 	Splits      []CreateSplitRequest `json:"splits"`
 }
 
 type CreateSplitRequest struct {
-	AccountGUID   string `json:"account_guid"`
-	Memo          string `json:"memo"`
-	ValueNum      int64  `json:"value_num"`
-	ValueDenom    int64  `json:"value_denom"`
-	QuantityNum   int64  `json:"quantity_num"`
-	QuantityDenom int64  `json:"quantity_denom"`
+	AccountGUID    string `json:"account_guid"`
+	Memo           string `json:"memo"`
+	ValueNum       int64  `json:"value_num"`
+	ValueDenom     int64  `json:"value_denom"`
+	QuantityNum    int64  `json:"quantity_num"`
+	QuantityDenom  int64  `json:"quantity_denom"`
+	ReconcileState string `json:"reconcile_state"` // empty → "n"
 }
 
 // CreateTransaction creates a transaction with its splits as a single atomic operation.
@@ -149,11 +151,16 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	txGUID := uuid.New().String()
 	now := time.Now().UTC()
 
+	meta := req.Metadata
+	if len(meta) == 0 {
+		meta = json.RawMessage("{}")
+	}
+
 	err = tx.QueryRow(ctx,
 		`INSERT INTO transactions (guid, custom_id, book_guid, post_date, enter_date, description, metadata, version, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)
 		 RETURNING guid`,
-		txGUID, req.CustomID, bookGUID, postDate, now, req.Description, json.RawMessage("{}"), now,
+		txGUID, req.CustomID, bookGUID, postDate, now, req.Description, meta, now,
 	).Scan(&txGUID)
 	if err != nil {
 		return nil, fmt.Errorf("insert transaction: %w", err)
@@ -163,24 +170,30 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	resultSplits := make([]models.Split, len(req.Splits))
 	for i, sp := range req.Splits {
 		splitGUID := uuid.New().String()
+		rs := sp.ReconcileState
+		if rs == "" {
+			rs = "n"
+		}
 		_, err := tx.Exec(ctx,
-			`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom, quantity_num, quantity_denom, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom,
+			                     quantity_num, quantity_denom, reconcile_state, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			splitGUID, txGUID, sp.AccountGUID, sp.Memo,
-			sp.ValueNum, sp.ValueDenom, sp.QuantityNum, sp.QuantityDenom, now,
+			sp.ValueNum, sp.ValueDenom, sp.QuantityNum, sp.QuantityDenom, rs, now,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert split %d: %w", i, err)
 		}
 		resultSplits[i] = models.Split{
-			GUID:          splitGUID,
-			TxGUID:        txGUID,
-			AccountGUID:   sp.AccountGUID,
-			Memo:          sp.Memo,
-			ValueNum:      sp.ValueNum,
-			ValueDenom:    sp.ValueDenom,
-			QuantityNum:   sp.QuantityNum,
-			QuantityDenom: sp.QuantityDenom,
+			GUID:           splitGUID,
+			TxGUID:         txGUID,
+			AccountGUID:    sp.AccountGUID,
+			Memo:           sp.Memo,
+			ValueNum:       sp.ValueNum,
+			ValueDenom:     sp.ValueDenom,
+			QuantityNum:    sp.QuantityNum,
+			QuantityDenom:  sp.QuantityDenom,
+			ReconcileState: rs,
 		}
 	}
 
@@ -196,7 +209,7 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 		PostDate:    postDate,
 		EnterDate:   now,
 		Description: req.Description,
-		Metadata:    json.RawMessage("{}"),
+		Metadata:    meta,
 		Version:     1,
 		CreatedAt:   now,
 		UpdatedAt:   now,
