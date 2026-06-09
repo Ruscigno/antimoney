@@ -73,7 +73,7 @@ func (h *PlaidHandler) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.svc.LinkAccounts(r.Context(), req.ItemGUID, req.Mappings, req.ImportPending); err != nil {
 		if err == ErrDuplicateLink {
-			handlers.WriteErrorPublic(w, http.StatusConflict, err.Error())
+			handlers.WriteErrorPublic(w, http.StatusConflict, "account already linked")
 			return
 		}
 		if err == ErrItemNotFound {
