@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	plaidapi "github.com/plaid/plaid-go/v26/plaid"
@@ -131,13 +132,11 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 	added := make([]PlaidTxn, 0, len(resp.Added))
 	for _, t := range resp.Added {
 		date, _ := time.Parse("2006-01-02", t.GetDate())
-		f := t.GetAmount()
-		amountNum := int64(f * 100)
-		if frac := f*100 - float64(amountNum); frac >= 0.5 {
-			amountNum++
-		} else if frac <= -0.5 {
-			amountNum--
-		}
+		// Plaid returns amounts as float64; round to whole cents (denom = 100).
+		// math.Round avoids the 1-cent error that plain int64(f*100) truncation
+		// causes (e.g. 0.10*100 == 9.999...). Currency values at this scale are
+		// represented exactly in float64, so the rounding is deterministic.
+		amountNum := int64(math.Round(t.GetAmount() * 100))
 		added = append(added, PlaidTxn{
 			TransactionID: t.GetTransactionId(),
 			Date:          date,

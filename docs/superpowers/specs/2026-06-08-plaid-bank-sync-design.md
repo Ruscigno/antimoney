@@ -231,3 +231,14 @@ type Categorizer interface {
 Webhooks; scheduled sync; applying `modified`/`removed` deltas and `pending→posted`
 reconciliation; update-mode reconnect; Bayesian / Plaid-taxonomy / rules categorizers;
 multi-currency display; encryption-key rotation.
+
+## 13. Known limitations
+
+- **Editing a Plaid-imported transaction unreconciles it.** Imports land as cleared
+  (`'c'`), but `UpdateTransaction` deletes and re-inserts all splits with
+  `reconcile_state = 'n'` (see CLAUDE.md), so any later edit silently un-clears the
+  transaction. Documented in code (`PlaidService.Import`); a user-visible warning in
+  the edit UI is a future enhancement.
+- **Auto-sync day boundary is `America/Toronto`** (the target bank's locale), centralized
+  in `frontend/src/utils/plaidSync.ts`. Users in other timezones may see the
+  "first open of the day" boundary shift by a few hours until it is made configurable.

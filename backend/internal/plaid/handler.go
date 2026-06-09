@@ -2,6 +2,7 @@ package plaid
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
@@ -72,11 +73,11 @@ func (h *PlaidHandler) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.LinkAccounts(r.Context(), req.ItemGUID, req.Mappings, req.ImportPending); err != nil {
-		if err == ErrDuplicateLink {
+		if errors.Is(err, ErrDuplicateLink) {
 			handlers.WriteErrorPublic(w, http.StatusConflict, "account already linked")
 			return
 		}
-		if err == ErrItemNotFound {
+		if errors.Is(err, ErrItemNotFound) {
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
 			return
 		}
@@ -97,7 +98,7 @@ func (h *PlaidHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.svc.Sync(r.Context(), req.ItemGUID)
 	if err != nil {
-		if err == ErrItemNotFound {
+		if errors.Is(err, ErrItemNotFound) {
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
 			return
 		}
@@ -116,19 +117,19 @@ func (h *PlaidHandler) handleImport(w http.ResponseWriter, r *http.Request) {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "invalid request")
 		return
 	}
-	n, err := h.svc.Import(r.Context(), req.Rows)
+	result, err := h.svc.Import(r.Context(), req.Rows)
 	if err != nil {
 		log.Printf("plaid import: %v", err)
 		handlers.WriteErrorPublic(w, http.StatusInternalServerError, "import failed")
 		return
 	}
-	handlers.WriteJSONPublic(w, http.StatusOK, map[string]int{"imported": n})
+	handlers.WriteJSONPublic(w, http.StatusOK, result)
 }
 
 func (h *PlaidHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	itemGUID := chi.URLParam(r, "guid")
 	if err := h.svc.Disconnect(r.Context(), itemGUID); err != nil {
-		if err == ErrItemNotFound {
+		if errors.Is(err, ErrItemNotFound) {
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
 			return
 		}

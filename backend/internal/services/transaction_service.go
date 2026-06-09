@@ -50,7 +50,10 @@ type CreateSplitRequest struct {
 	ValueDenom     int64  `json:"value_denom"`
 	QuantityNum    int64  `json:"quantity_num"`
 	QuantityDenom  int64  `json:"quantity_denom"`
-	ReconcileState string `json:"reconcile_state"` // empty → "n"
+	// Set programmatically only (e.g. by the Plaid importer); never accepted from
+	// the public API body, otherwise any user could POST reconcile_state:"y" and
+	// bypass the reconcile workflow. Empty → "n".
+	ReconcileState string `json:"-"`
 }
 
 // CreateTransaction creates a transaction with its splits as a single atomic operation.

@@ -84,15 +84,25 @@ func (s *PlaidService) Exchange(ctx context.Context, publicToken string) (*Excha
 
 	itemGUID := uuid.New().String()
 	now := time.Now().UTC()
-	_, err = s.pool.Exec(ctx,
+	// Upsert on the (book_guid, item_id) unique key: re-linking the same Plaid
+	// item (network retry, re-auth) refreshes the stored token in place instead
+	// of inserting a duplicate row. RETURNING yields the surviving row's guid.
+	err = s.pool.QueryRow(ctx,
 		`INSERT INTO plaid_items
 			(guid, book_guid, item_id, institution_name, access_token_ciphertext,
 			 access_token_nonce, version, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $7)
+		 ON CONFLICT (book_guid, item_id) DO UPDATE SET
+			institution_name        = EXCLUDED.institution_name,
+			access_token_ciphertext = EXCLUDED.access_token_ciphertext,
+			access_token_nonce      = EXCLUDED.access_token_nonce,
+			updated_at              = EXCLUDED.updated_at,
+			version                 = plaid_items.version + 1
+		 RETURNING guid`,
 		itemGUID, bookGUID, itemID, institutionName, ciphertext, nonce, now,
-	)
+	).Scan(&itemGUID)
 	if err != nil {
-		return nil, fmt.Errorf("insert plaid_items: %w", err)
+		return nil, fmt.Errorf("upsert plaid_items: %w", err)
 	}
 
 	accounts, err := s.client.GetAccounts(ctx, accessToken)
@@ -193,14 +203,14 @@ type SyncResult struct {
 func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, error) {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 
-	var itemID, cursor string
+	var cursor string
 	var ciphertext, nonce []byte
 	var importPending bool
 	err := s.pool.QueryRow(ctx,
-		`SELECT item_id, COALESCE(sync_cursor,''), access_token_ciphertext, access_token_nonce, import_pending
+		`SELECT COALESCE(sync_cursor,''), access_token_ciphertext, access_token_nonce, import_pending
 		 FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
 		itemGUID, bookGUID,
-	).Scan(&itemID, &cursor, &ciphertext, &nonce, &importPending)
+	).Scan(&cursor, &ciphertext, &nonce, &importPending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrItemNotFound
 	}
@@ -309,9 +319,6 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		})
 	}
 
-	// Suppress unused variable: itemID is selected for potential future use (logging, webhooks).
-	_ = itemID
-
 	return &SyncResult{Count: len(suggestions), Suggestions: suggestions}, nil
 }
 
@@ -339,16 +346,27 @@ type ImportRow struct {
 	AmountDenom         int64  `json:"amount_denom"`
 }
 
+// ImportResult reports how many rows were imported and which transaction_ids
+// failed, so the caller can detect a partially-dropped import.
+type ImportResult struct {
+	Imported int      `json:"imported"`
+	Failed   []string `json:"failed,omitempty"`
+}
+
 // Import creates one cleared transaction per ImportRow.
 // Sign convention: Plaid AmountNum > 0 = money leaving bank account.
 // bank split = -AmountNum, category split = +AmountNum (maintains zero-sum).
-func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (int, error) {
+//
+// Known limitation: splits are imported as cleared ('c'), but editing the
+// transaction later via TransactionService.UpdateTransaction resets every split
+// to 'n' (documented in CLAUDE.md), silently un-clearing a Plaid import.
+func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (*ImportResult, error) {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
-	imported := 0
+	result := &ImportResult{}
 	for _, row := range rows {
 		exists, err := s.transactionExists(ctx, bookGUID, row.TransactionID)
 		if err != nil {
-			return imported, fmt.Errorf("dedupe check for %s: %w", row.TransactionID, err)
+			return result, fmt.Errorf("dedupe check for %s: %w", row.TransactionID, err)
 		}
 		if exists {
 			continue
@@ -356,6 +374,8 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (int, error
 
 		postDate, err := time.Parse("2006-01-02", row.Date)
 		if err != nil {
+			log.Printf("plaid import row %s: invalid date %q: %v", row.TransactionID, row.Date, err)
+			result.Failed = append(result.Failed, row.TransactionID)
 			continue
 		}
 
@@ -387,11 +407,12 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (int, error
 		})
 		if err != nil {
 			log.Printf("plaid import row %s: %v", row.TransactionID, err)
+			result.Failed = append(result.Failed, row.TransactionID)
 			continue
 		}
-		imported++
+		result.Imported++
 	}
-	return imported, nil
+	return result, nil
 }
 
 // Disconnect calls Plaid /item/remove, deletes the plaid_items row, and clears

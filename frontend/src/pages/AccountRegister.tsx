@@ -7,6 +7,7 @@ import ReconcileWizard from '../components/ReconcileWizard';
 import AccountBreadcrumbs from '../components/AccountBreadcrumbs';
 import ImportMatcher from '../components/ImportMatcher';
 import type { Account, RegisterEntry, SyncSuggestion } from '../types';
+import { shouldAutoSyncToday, type PlaidAccountMeta } from '../utils/plaidSync';
 import { t } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
 import { filterRegisterEntries } from '../utils/registerSearch';
@@ -213,16 +214,10 @@ export default function AccountRegister() {
     }, [id]);
 
     // Auto-sync on first open of the day if account is linked to Plaid.
+    // Trigger decision (incl. the timezone limitation) lives in shouldAutoSyncToday.
     useEffect(() => {
-        const plaidMeta = (account?.metadata as any)?.plaid as { item_guid?: string; last_synced_at?: string } | undefined;
-        if (!plaidMeta?.item_guid) return;
-
-        const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Toronto' });
-        const lastSynced = plaidMeta.last_synced_at
-            ? new Date(plaidMeta.last_synced_at).toLocaleDateString('en-CA', { timeZone: 'America/Toronto' })
-            : null;
-
-        if (!lastSynced || lastSynced < todayET) {
+        const plaidMeta = (account?.metadata as any)?.plaid as PlaidAccountMeta | undefined;
+        if (plaidMeta?.item_guid && shouldAutoSyncToday(plaidMeta)) {
             triggerSync(plaidMeta.item_guid, account?.name ?? 'Bank');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
