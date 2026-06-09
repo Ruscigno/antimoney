@@ -9,6 +9,10 @@ type Config struct {
 	Environment         string
 	JWTSecret           string
 	CORSAllowedOrigins  string
+	PlaidClientID       string
+	PlaidSecret         string
+	PlaidEnv            string
+	PlaidTokenEncKey    string
 }
 
 func Load() *Config {
@@ -19,6 +23,10 @@ func Load() *Config {
 		Environment:        getEnv("ENVIRONMENT", "development"),
 		JWTSecret:          getEnv("JWT_SECRET", "antimoney-dev-secret-change-in-prod"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8000,http://127.0.0.1:5173"),
+		PlaidClientID:      getEnv("PLAID_CLIENT_ID", ""),
+		PlaidSecret:        getEnv("PLAID_SECRET", ""),
+		PlaidEnv:           getEnv("PLAID_ENV", "sandbox"),
+		PlaidTokenEncKey:   getEnv("PLAID_TOKEN_ENC_KEY", ""),
 	}
 }
 
