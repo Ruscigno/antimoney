@@ -19,6 +19,10 @@ setup() {
 echo "project=\${CLOUDSDK_CORE_PROJECT:-UNSET} args=\$*" >> "$CALLS"
 case "\$1 \$2 \$3" in
   "compute instances get-serial-port-output")
+    if [ -n "\${STUB_SERIAL_ERR:-}" ]; then
+      echo "ERROR: PERMISSION_DENIED getSerialPortOutput" >&2
+      exit 1
+    fi
     [ -n "\${STUB_NO_MARKER:-}" ] || echo "startup-script: ... Finished running startup scripts"
     ;;
   "compute instances describe")
@@ -125,4 +129,35 @@ EOF
   # Files untouched — guards against the double-restore overwrite bug.
   [ "$(cat Dockerfile)" = "DEV" ]
   [ "$(cat Dockerfile.prod)" = "PROD" ]
+}
+
+@test "load_env loads .env values, preserving spaces (the SC2046 fix)" {
+  cd "$BATS_TEST_TMPDIR"
+  cat > .env <<'ENVEOF'
+# comment lines are ignored
+PROJECT_ID=from-dotenv
+LABEL="hello world"
+ENVEOF
+  load_env
+  [ "$PROJECT_ID" = "from-dotenv" ]
+  # A quoted value with a space survives `source`; the old
+  # `export $(... | xargs)` would have word-split it into "hello".
+  [ "$LABEL" = "hello world" ]
+}
+
+@test "load_env is a no-op (and succeeds) when .env is absent" {
+  cd "$BATS_TEST_TMPDIR"
+  run load_env
+  [ "$status" -eq 0 ]
+}
+
+@test "wait_for_db surfaces the gcloud error on timeout instead of swallowing it" {
+  PROJECT_ID="my-proj"; require_project
+  export STUB_SERIAL_ERR=1
+  DB_WAIT_TIMEOUT=1
+  DB_WAIT_INTERVAL=0
+  run wait_for_db
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"WARNING"* ]]
+  [[ "$output" == *"PERMISSION_DENIED"* ]]
 }

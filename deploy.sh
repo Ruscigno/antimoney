@@ -5,6 +5,10 @@
 # The script is structured as functions so it can be sourced and unit-tested
 # (see tests/deploy.bats). When executed directly it runs main().
 
+# Strict mode for the whole script, so every helper function runs under the same
+# errexit/pipefail guarantees whether it is invoked via main() or on its own.
+set -eo pipefail
+
 # Load variables from .env into the environment, if present.
 # Uses `set -a` + `source` rather than `export $(... | xargs)` so values with
 # spaces/quotes are handled correctly (xargs word-splits them — ShellCheck SC2046).
@@ -56,6 +60,13 @@ read_outputs() {
 # timeout; if the marker never appears (e.g. the serial buffer rotated on a
 # long-running VM) we warn and proceed, matching the previous best-effort wait.
 wait_for_db() {
+  # ZONE is derived by require_project; calling this in isolation without it
+  # would silently poll the wrong (empty) zone forever.
+  if [ -z "${ZONE:-}" ]; then
+    echo "wait_for_db: ZONE is not set (call require_project first)" >&2
+    return 1
+  fi
+
   local timeout="${DB_WAIT_TIMEOUT:-120}"
   local interval="${DB_WAIT_INTERVAL:-10}"
   local marker="Finished running startup scripts"
@@ -64,10 +75,17 @@ wait_for_db() {
   # advance `elapsed` and loop forever.
   [ "$interval" -ge 1 ] || interval=1
 
+  # Capture gcloud's stderr so a real failure (bad zone, missing
+  # compute.instances.getSerialPortOutput permission, instance not created) is
+  # surfaced on timeout instead of being silently swallowed by 2>/dev/null.
+  local errfile
+  errfile=$(mktemp)
+
   echo "[2/5] Waiting up to ${timeout}s for the DB VM startup script to finish..."
   while [ "$elapsed" -lt "$timeout" ]; do
     if gcloud compute instances get-serial-port-output antimoney-db \
-        --zone="$ZONE" 2>/dev/null | grep -q "$marker"; then
+        --zone="$ZONE" 2>"$errfile" | grep -q "$marker"; then
+      rm -f "$errfile"
       echo "DB VM startup script finished."
       return 0
     fi
@@ -76,6 +94,11 @@ wait_for_db() {
   done
 
   echo "WARNING: DB readiness marker not seen after ${timeout}s; proceeding anyway."
+  if [ -s "$errfile" ]; then
+    echo "Last error from 'gcloud compute instances get-serial-port-output':" >&2
+    cat "$errfile" >&2
+  fi
+  rm -f "$errfile"
   return 0
 }
 
@@ -144,8 +167,6 @@ deploy_frontend() {
 }
 
 main() {
-  set -eo pipefail
-
   echo "============================================="
   echo " Deploying Antimoney to Google Cloud"
   echo "============================================="
