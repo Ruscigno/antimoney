@@ -3,6 +3,7 @@ package plaid
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -32,23 +33,33 @@ func (c *HistoryCategorizer) Suggest(ctx context.Context, bookGUID string, txn P
 		return "", false
 	}
 
-	const sql = `
+	// Spec §7: a normalized exact match takes priority over a substring match,
+	// even when a substring candidate is more recent. Both conditions are
+	// constant SQL fragments — only $2 carries user data.
+	const baseSQL = `
 		SELECT s.account_guid
 		FROM transactions t
 		JOIN splits s ON s.tx_guid = t.guid
 		JOIN accounts a ON a.guid = s.account_guid AND a.book_guid = $1
 		WHERE t.book_guid = $1
-		  AND LOWER(t.description) LIKE '%' || $2 || '%'
+		  AND %s
 		  AND a.account_type NOT IN ('BANK', 'ASSET', 'CASH', 'ROOT')
 		ORDER BY t.post_date DESC
 		LIMIT 1`
 
-	var accountGUID string
-	if err := c.pool.QueryRow(ctx, sql, bookGUID, q).Scan(&accountGUID); err != nil {
+	for _, cond := range []string{
+		`LOWER(TRIM(t.description)) = $2`,
+		`LOWER(t.description) LIKE '%' || $2 || '%'`,
+	} {
+		var accountGUID string
+		err := c.pool.QueryRow(ctx, fmt.Sprintf(baseSQL, cond), bookGUID, q).Scan(&accountGUID)
+		if err == nil {
+			return accountGUID, true
+		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			log.Printf("categorizer: unexpected DB error: %v", err)
+			return "", false
 		}
-		return "", false
 	}
-	return accountGUID, true
+	return "", false
 }

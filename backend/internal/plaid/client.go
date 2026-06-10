@@ -1,7 +1,9 @@
 package plaid
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -9,6 +11,11 @@ import (
 
 	plaidapi "github.com/plaid/plaid-go/v26/plaid"
 )
+
+// ErrReauthRequired signals Plaid's ITEM_LOGIN_REQUIRED: the stored credentials
+// no longer work and the user must re-authenticate the bank connection
+// (resolved by disconnecting and reconnecting via Link).
+var ErrReauthRequired = errors.New("plaid item requires re-authentication")
 
 // PlaidTxn is a normalized Plaid transaction. AmountNum > 0 means money leaving
 // the bank account (a purchase/payment).
@@ -131,7 +138,14 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 	}
 	added := make([]PlaidTxn, 0, len(resp.Added))
 	for _, t := range resp.Added {
-		date, _ := time.Parse("2006-01-02", t.GetDate())
+		date, err := time.Parse("2006-01-02", t.GetDate())
+		if err != nil {
+			// Don't import a transaction with a zero date — log and skip at the
+			// source instead of letting a corrupted row flow downstream.
+			log.Printf("plaid SyncTransactions: skipping txn %s: unparseable date %q: %v",
+				t.GetTransactionId(), t.GetDate(), err)
+			continue
+		}
 		// Plaid returns amounts as float64; round to whole cents (denom = 100).
 		// math.Round is essential because float64 cannot represent most cent
 		// fractions exactly: 0.29 * 100 evaluates to 28.999999999999996, so plain
@@ -143,9 +157,12 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 			Date:          date,
 			Description:   t.GetName(),
 			AmountNum:     amountNum,
-			AmountDenom:   100,
-			AccountID:     t.GetAccountId(),
-			Pending:       t.GetPending(),
+			// MVP limitation: denom 100 assumes 2-decimal currencies (CAD/USD).
+			// Zero-decimal (JPY) or 3-decimal (BHD) currencies would need the
+			// account commodity's exponent — see spec §13 Known limitations.
+			AmountDenom: 100,
+			AccountID:   t.GetAccountId(),
+			Pending:     t.GetPending(),
 		})
 	}
 	return added, resp.GetNextCursor(), resp.GetHasMore(), nil
@@ -166,7 +183,11 @@ func plaidErr(op string, err error) error {
 		return nil
 	}
 	if e, ok := err.(interface{ Body() []byte }); ok {
-		log.Printf("plaid %s error: %v; body=%s", op, err, e.Body())
+		body := e.Body()
+		log.Printf("plaid %s error: %v; body=%s", op, err, body)
+		if bytes.Contains(body, []byte("ITEM_LOGIN_REQUIRED")) {
+			return ErrReauthRequired
+		}
 	} else {
 		log.Printf("plaid %s error: %v", op, err)
 	}

@@ -44,12 +44,12 @@ type CreateTransactionRequest struct {
 }
 
 type CreateSplitRequest struct {
-	AccountGUID    string `json:"account_guid"`
-	Memo           string `json:"memo"`
-	ValueNum       int64  `json:"value_num"`
-	ValueDenom     int64  `json:"value_denom"`
-	QuantityNum    int64  `json:"quantity_num"`
-	QuantityDenom  int64  `json:"quantity_denom"`
+	AccountGUID   string `json:"account_guid"`
+	Memo          string `json:"memo"`
+	ValueNum      int64  `json:"value_num"`
+	ValueDenom    int64  `json:"value_denom"`
+	QuantityNum   int64  `json:"quantity_num"`
+	QuantityDenom int64  `json:"quantity_denom"`
 	// Set programmatically only (e.g. by the Plaid importer); never accepted from
 	// the public API body, otherwise any user could POST reconcile_state:"y" and
 	// bypass the reconcile workflow. Empty → "n".
@@ -653,7 +653,7 @@ func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accoun
 			return nil, fmt.Errorf("invalid cursor_date for around: %w", err)
 		}
 		cursorTimestamp := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 11, 0, 0, 0, time.UTC)
-		
+
 		var countBefore int
 		err = s.pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM splits s JOIN transactions t ON s.tx_guid = t.guid
@@ -663,7 +663,7 @@ func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accoun
 		if err != nil {
 			return nil, fmt.Errorf("count before: %w", err)
 		}
-		
+
 		beforeCount := limit * 3 / 4
 		queryOffset = countBefore - beforeCount
 		if queryOffset < 0 {

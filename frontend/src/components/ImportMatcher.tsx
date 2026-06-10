@@ -68,8 +68,18 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                 amount_denom: r.suggestion.amount_denom,
             }));
             const result = await plaidImport(payload);
-            onImported(result.imported);
-        } catch (e: any) {
+            if (result.failed && result.failed.length > 0) {
+                // Partial failure: keep the modal open so the user can retry —
+                // already-imported rows are deduped server-side on retry.
+                setError(
+                    t('plaid.importPartial')
+                        .replace('{{imported}}', String(result.imported))
+                        .replace('{{failed}}', String(result.failed.length)),
+                );
+            } else {
+                onImported(result.imported);
+            }
+        } catch {
             setError(t('plaid.importError'));
         } finally {
             setImporting(false);
@@ -88,7 +98,8 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                 </div>
                 <div className="modal-body" style={{ overflowY: 'auto', maxHeight: '60vh' }}>
                     {error && <div className="message error">{error}</div>}
-                    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <div className="import-matcher-scroll">
+                    <table>
                         <thead>
                             <tr>
                                 <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colDate')}</th>
@@ -110,10 +121,10 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                                     <td style={{ padding: '4px 8px' }}>{row.suggestion.bank_account_name}</td>
                                     <td style={{ padding: '4px 8px' }}>
                                         <select
+                                            className="im-category-select"
                                             value={row.categoryGUID}
                                             onChange={e => setCategory(i, e.target.value)}
                                             disabled={!row.included}
-                                            style={{ minWidth: '160px' }}
                                         >
                                             <option value="">{t('plaid.categoryRequired')}</option>
                                             {accounts.map(a => (
@@ -132,6 +143,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                             ))}
                         </tbody>
                     </table>
+                    </div>
                 </div>
                 <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', padding: '1rem' }}>
                     <button className="btn btn-secondary" onClick={onClose} disabled={importing}>
@@ -143,7 +155,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                         disabled={importing || !allCategorized || includedRows.length === 0}
                     >
                         {importing
-                            ? t('plaid.connecting')
+                            ? t('plaid.importing')
                             : t('plaid.confirmImport').replace('{{count}}', String(includedRows.length))}
                     </button>
                 </div>

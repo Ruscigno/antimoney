@@ -65,4 +65,31 @@ func TestHistoryCategorizer(t *testing.T) {
 	if ok {
 		t.Fatal("expected no suggestion for unknown payee")
 	}
+
+	// Exact-match priority (spec §7): an older exact match must beat a NEWER
+	// substring match.
+	coffee, _ := accSvc.CreateAccount(ctx, services.CreateAccountRequest{
+		Name: "Coffee", AccountType: models.AccountTypeExpense,
+	})
+	// Older transaction whose description matches exactly (after normalization).
+	_, err = txSvc.CreateTransaction(ctx, services.CreateTransactionRequest{
+		PostDate:    time.Date(2025, 6, 1, 11, 0, 0, 0, time.UTC),
+		Description: "  Tim Hortons ", // trims + case-folds to "tim hortons"
+		Splits: []services.CreateSplitRequest{
+			{AccountGUID: bank.GUID, ValueNum: -300, ValueDenom: 100, QuantityNum: -300, QuantityDenom: 100},
+			{AccountGUID: coffee.GUID, ValueNum: 300, ValueDenom: 100, QuantityNum: 300, QuantityDenom: 100},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed exact-match transaction: %v", err)
+	}
+	// The substring candidate ("TIM HORTONS #123" → Dining, post 2026-01-01) is
+	// MORE RECENT than the exact candidate (2025-06-01); exact must still win.
+	got, ok = cat.Suggest(ctx, res.BookGUID, PlaidTxn{Description: "Tim Hortons"})
+	if !ok {
+		t.Fatal("expected a suggestion")
+	}
+	if got != coffee.GUID {
+		t.Fatalf("exact match must take priority: got %q, want coffee GUID %q", got, coffee.GUID)
+	}
 }

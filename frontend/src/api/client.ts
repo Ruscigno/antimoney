@@ -168,7 +168,9 @@ export const plaidImport = (rows: {
     amount_num: number;
     amount_denom: number;
 }[]) =>
-    fetchJSON<{ imported: number }>('/data/plaid/import', {
+    // failed lists the transaction_ids the backend could not import — callers
+    // must surface a partial failure instead of reporting blanket success.
+    fetchJSON<{ imported: number; failed?: string[] }>('/data/plaid/import', {
         method: 'POST',
         body: JSON.stringify({ rows }),
     });

@@ -9,6 +9,10 @@ const h = vi.hoisted(() => ({
     plaidGetLinkToken: vi.fn(),
     plaidExchange: vi.fn(),
     plaidLink: vi.fn(),
+    plaidListItems: vi.fn(),
+    plaidDisconnect: vi.fn(),
+    plaidSync: vi.fn(),
+    plaidImport: vi.fn(),
     onSuccess: { fn: null as null | ((token: string, meta: unknown) => void) },
 }));
 
@@ -17,6 +21,10 @@ vi.mock('../api/client', () => ({
     plaidGetLinkToken: h.plaidGetLinkToken,
     plaidExchange: h.plaidExchange,
     plaidLink: h.plaidLink,
+    plaidListItems: h.plaidListItems,
+    plaidDisconnect: h.plaidDisconnect,
+    plaidSync: h.plaidSync,
+    plaidImport: h.plaidImport,
 }));
 
 // Mock Plaid Link: capture onSuccess; open() fires it (simulating a successful login).
@@ -43,6 +51,10 @@ beforeEach(() => {
     h.plaidGetLinkToken.mockReset().mockResolvedValue({ link_token: 'lt' });
     h.plaidExchange.mockReset().mockResolvedValue({ item_guid: 'item1', institution_name: 'RBC', accounts: bankAccounts });
     h.plaidLink.mockReset().mockResolvedValue(undefined);
+    h.plaidListItems.mockReset().mockResolvedValue({ items: [] });
+    h.plaidDisconnect.mockReset().mockResolvedValue(undefined);
+    h.plaidSync.mockReset().mockResolvedValue({ count: 0, suggestions: [] });
+    h.plaidImport.mockReset().mockResolvedValue({ imported: 0 });
     h.onSuccess.fn = null;
     window.matchMedia = window.matchMedia || (vi.fn().mockImplementation((q: string) => ({
         matches: false, media: q, onchange: null,
@@ -70,7 +82,7 @@ describe('DataManagement — Connect Bank mapping', () => {
         fireEvent.change(select, { target: { value: 'a1' } });
         fireEvent.click(checkbox); // import_pending = true
 
-        fireEvent.click(screen.getByRole('button', { name: 'plaid.connected' }));
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.save' }));
 
         await waitFor(() =>
             expect(h.plaidLink).toHaveBeenCalledWith('item1', [{ account_id: 'pa1', account_guid: 'a1' }], true),
@@ -84,7 +96,62 @@ describe('DataManagement — Connect Bank mapping', () => {
         await waitFor(() => expect(container.querySelector('.plaid-mapping')).toBeInTheDocument());
 
         // Leave the mapping unselected → it must be filtered out.
-        fireEvent.click(screen.getByRole('button', { name: 'plaid.connected' }));
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.save' }));
         await waitFor(() => expect(h.plaidLink).toHaveBeenCalledWith('item1', [], false));
+    });
+});
+
+const connectedItem = {
+    guid: 'item1',
+    institution_name: 'RBC',
+    last_synced_at: '2026-06-09T12:00:00Z',
+    import_pending: false,
+};
+
+describe('DataManagement — Connected banks', () => {
+    it('lists connected banks and disconnects after confirmation', async () => {
+        h.plaidListItems.mockResolvedValue({ items: [connectedItem] });
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+        render(<DataManagement />);
+        await waitFor(() => expect(screen.getByText('RBC')).toBeInTheDocument());
+        expect(screen.getByText('plaid.connectedBanks')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.disconnect' }));
+        await waitFor(() => expect(h.plaidDisconnect).toHaveBeenCalledWith('item1'));
+        expect(confirmSpy).toHaveBeenCalled();
+        confirmSpy.mockRestore();
+    });
+
+    it('does not disconnect when the confirmation is declined', async () => {
+        h.plaidListItems.mockResolvedValue({ items: [connectedItem] });
+        const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+        render(<DataManagement />);
+        await waitFor(() => expect(screen.getByText('RBC')).toBeInTheDocument());
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.disconnect' }));
+
+        expect(h.plaidDisconnect).not.toHaveBeenCalled();
+        confirmSpy.mockRestore();
+    });
+
+    it('Sync now reports "no new transactions" when the sync is empty', async () => {
+        h.plaidListItems.mockResolvedValue({ items: [connectedItem] });
+        render(<DataManagement />);
+        await waitFor(() => expect(screen.getByText('RBC')).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.syncNow' }));
+        await waitFor(() => expect(h.plaidSync).toHaveBeenCalledWith('item1'));
+        await waitFor(() => expect(screen.getByText('plaid.syncNone')).toBeInTheDocument());
+    });
+
+    it('Sync now surfaces the reconnect-needed message on reconnect_required', async () => {
+        h.plaidListItems.mockResolvedValue({ items: [connectedItem] });
+        h.plaidSync.mockRejectedValue(new Error('reconnect_required'));
+        render(<DataManagement />);
+        await waitFor(() => expect(screen.getByText('RBC')).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.syncNow' }));
+        await waitFor(() => expect(screen.getByText('plaid.reconnectNeeded')).toBeInTheDocument());
     });
 });

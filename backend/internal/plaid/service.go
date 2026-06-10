@@ -11,15 +11,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/user/antimoney/internal/auth"
 	"github.com/user/antimoney/internal/services"
 )
 
 var (
-	ErrItemNotFound  = errors.New("plaid item not found or access denied")
-	ErrDuplicateLink = errors.New("this bank account is already linked to another Antimoney account")
-	ErrInvalidEncKey = errors.New("PLAID_TOKEN_ENC_KEY must be a base64-encoded 32-byte key")
+	ErrItemNotFound         = errors.New("plaid item not found or access denied")
+	ErrDuplicateLink        = errors.New("this bank account is already linked to another Antimoney account")
+	ErrAccountNotFound      = errors.New("account not found or access denied")
+	ErrAccountAlreadyLinked = errors.New("this Antimoney account is already linked to a bank account")
+	ErrInvalidEncKey        = errors.New("PLAID_TOKEN_ENC_KEY must be a base64-encoded 32-byte key")
 )
 
 // maxSyncPages caps the number of /transactions/sync pages per API call to
@@ -154,11 +157,33 @@ func (s *PlaidService) LinkAccounts(ctx context.Context, itemGUID string, mappin
 			return ErrDuplicateLink
 		}
 
+		// The other half of the 1:1 invariant: the target account must exist in
+		// this book and must not already carry a different plaid link — the
+		// jsonb_set below would otherwise silently overwrite it (last-write-wins)
+		// and orphan the previous link. Re-linking the identical pair is allowed
+		// (idempotent re-map).
+		var existingItem, existingAcct *string
+		err := tx.QueryRow(ctx,
+			`SELECT metadata->'plaid'->>'item_guid', metadata->'plaid'->>'account_id'
+			 FROM accounts WHERE guid = $1 AND book_guid = $2`,
+			m.AccountGUID, bookGUID,
+		).Scan(&existingItem, &existingAcct)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrAccountNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("check account %s: %w", m.AccountGUID, err)
+		}
+		if existingItem != nil &&
+			(*existingItem != itemGUID || existingAcct == nil || *existingAcct != m.PlaidAccountID) {
+			return ErrAccountAlreadyLinked
+		}
+
 		link, _ := json.Marshal(map[string]string{
 			"item_guid":  itemGUID,
 			"account_id": m.PlaidAccountID,
 		})
-		_, err = tx.Exec(ctx,
+		ct, err := tx.Exec(ctx,
 			`UPDATE accounts
 			 SET metadata   = jsonb_set(COALESCE(metadata, '{}'), '{plaid}', $1::jsonb),
 			     updated_at = NOW()
@@ -167,6 +192,11 @@ func (s *PlaidService) LinkAccounts(ctx context.Context, itemGUID string, mappin
 		)
 		if err != nil {
 			return fmt.Errorf("link account %s: %w", m.AccountGUID, err)
+		}
+		// Never report "linked" when nothing was written (the SELECT above proved
+		// existence inside this tx, so this is a belt-and-braces consistency check).
+		if ct.RowsAffected() == 0 {
+			return ErrAccountNotFound
 		}
 	}
 
@@ -227,6 +257,11 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	for i := 0; i < maxSyncPages; i++ {
 		added, nextCursor, hasMore, err := s.client.SyncTransactions(ctx, accessToken, cursor)
 		if err != nil {
+			// ITEM_LOGIN_REQUIRED must reach the user as "reconnect your bank",
+			// not as a generic failure.
+			if errors.Is(err, ErrReauthRequired) {
+				return nil, ErrReauthRequired
+			}
 			log.Printf("plaid SyncTransactions error: %v", err)
 			return nil, fmt.Errorf("sync failed")
 		}
@@ -406,6 +441,13 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (*ImportRes
 			},
 		})
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_transactions_plaid_txn" {
+				// A concurrent import inserted this transaction between our
+				// dedupe check and the insert; the partial unique index (the
+				// real idempotency guarantee) caught it. Already imported — skip.
+				continue
+			}
 			log.Printf("plaid import row %s: %v", row.TransactionID, err)
 			result.Failed = append(result.Failed, row.TransactionID)
 			continue

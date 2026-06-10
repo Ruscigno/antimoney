@@ -154,8 +154,9 @@ export interface SyncSuggestion {
     amount_denom: number;
     bank_account_guid: string;
     bank_account_name: string;
-    suggested_category_guid: string;
-    suggested_category_name: string;
+    // Absent when the categorizer has no suggestion (backend marks omitempty).
+    suggested_category_guid?: string;
+    suggested_category_name?: string;
 }
 
 export interface SyncResult {

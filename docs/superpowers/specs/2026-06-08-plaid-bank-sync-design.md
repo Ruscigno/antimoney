@@ -242,3 +242,7 @@ multi-currency display; encryption-key rotation.
 - **Auto-sync day boundary is `America/Toronto`** (the target bank's locale), centralized
   in `frontend/src/utils/plaidSync.ts`. Users in other timezones may see the
   "first open of the day" boundary shift by a few hours until it is made configurable.
+- **Amounts assume 2-decimal currencies.** Plaid float amounts are converted with a
+  fixed denominator of 100 (cents) — correct for CAD/USD (the MVP scope), wrong for
+  zero-decimal (JPY) or 3-decimal (BHD) currencies, which would need the account
+  commodity's exponent (see the comment in `client.go` `SyncTransactions`).

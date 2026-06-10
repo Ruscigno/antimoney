@@ -77,8 +77,16 @@ func (h *PlaidHandler) handleLink(w http.ResponseWriter, r *http.Request) {
 			handlers.WriteErrorPublic(w, http.StatusConflict, "account already linked")
 			return
 		}
+		if errors.Is(err, ErrAccountAlreadyLinked) {
+			handlers.WriteErrorPublic(w, http.StatusConflict, "account already linked to a bank")
+			return
+		}
 		if errors.Is(err, ErrItemNotFound) {
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
+			return
+		}
+		if errors.Is(err, ErrAccountNotFound) {
+			handlers.WriteErrorPublic(w, http.StatusNotFound, "account not found")
 			return
 		}
 		log.Printf("plaid link: %v", err)
@@ -102,6 +110,12 @@ func (h *PlaidHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
 			return
 		}
+		if errors.Is(err, ErrReauthRequired) {
+			// The frontend matches this exact error string to show the
+			// "reconnect your bank" message instead of a generic failure.
+			handlers.WriteErrorPublic(w, http.StatusConflict, "reconnect_required")
+			return
+		}
 		log.Printf("plaid sync: %v", err)
 		handlers.WriteErrorPublic(w, http.StatusInternalServerError, "sync failed")
 		return
@@ -109,12 +123,24 @@ func (h *PlaidHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 	handlers.WriteJSONPublic(w, http.StatusOK, result)
 }
 
+// maxImportRows bounds a single /import call so it cannot blow through the
+// 30s request timeout mid-way and leave a partial import behind.
+const maxImportRows = 500
+
 func (h *PlaidHandler) handleImport(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Rows []ImportRow `json:"rows"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(req.Rows) == 0 {
+		handlers.WriteErrorPublic(w, http.StatusBadRequest, "rows is required")
+		return
+	}
+	if len(req.Rows) > maxImportRows {
+		handlers.WriteErrorPublic(w, http.StatusBadRequest, "too many rows (max 500)")
 		return
 	}
 	result, err := h.svc.Import(r.Context(), req.Rows)

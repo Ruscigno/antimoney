@@ -16,6 +16,7 @@ type fakePlaidClient struct {
 	txPages     [][]PlaidTxn // one slice per SyncTransactions call
 	pageIndex   int
 	removeErr   error
+	syncErr     error // returned by SyncTransactions when set
 }
 
 func newFakeClient() *fakePlaidClient {
@@ -65,6 +66,9 @@ func (f *fakePlaidClient) GetAccounts(_ context.Context, _ string) ([]PlaidAccou
 }
 
 func (f *fakePlaidClient) SyncTransactions(_ context.Context, _, _ string) ([]PlaidTxn, string, bool, error) {
+	if f.syncErr != nil {
+		return nil, "", false, f.syncErr
+	}
 	if f.pageIndex >= len(f.txPages) {
 		return nil, fmt.Sprintf("cursor-%d", f.pageIndex), false, nil
 	}

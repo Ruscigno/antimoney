@@ -89,6 +89,19 @@ describe('ImportMatcher', () => {
         ]);
     });
 
+    it('keeps the modal open and shows a partial-failure message when some rows fail', async () => {
+        plaidImport.mockResolvedValue({ imported: 1, failed: ['tx2'] });
+        const onImported = vi.fn();
+        render(<ImportMatcher institutionName="RBC" suggestions={[suggestion({ suggested_category_guid: 'groc' })]} onClose={() => {}} onImported={onImported} />);
+        await waitFor(() => expect(screen.getByRole('option', { name: 'Groceries' })).toBeInTheDocument());
+
+        fireEvent.click(confirmBtn());
+
+        // Partial failure: error message rendered, success callback NOT fired.
+        await waitFor(() => expect(screen.getByText(/plaid.importPartial/)).toBeInTheDocument());
+        expect(onImported).not.toHaveBeenCalled();
+    });
+
     it('disables confirm when every row is excluded', async () => {
         render(<ImportMatcher institutionName="RBC" suggestions={[suggestion({ suggested_category_guid: 'groc' })]} onClose={() => {}} onImported={() => {}} />);
         await waitFor(() => expect(screen.getByRole('option', { name: 'Groceries' })).toBeInTheDocument());

@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { usePlaidLink } from 'react-plaid-link';
 import { t } from '../i18n';
-import { getAccounts, plaidGetLinkToken, plaidExchange, plaidLink } from '../api/client';
-import type { Account, PlaidBankAccount } from '../types';
+import { getAccounts, plaidGetLinkToken, plaidExchange, plaidLink, plaidListItems, plaidDisconnect, plaidSync } from '../api/client';
+import type { Account, PlaidBankAccount, PlaidItem, SyncSuggestion } from '../types';
+import ImportMatcher from '../components/ImportMatcher';
 
 export default function DataManagement() {
     const [accounts, setAccounts] = useState<Account[]>([]);
@@ -25,6 +26,54 @@ export default function DataManagement() {
     const [plaidMappings, setPlaidMappings] = useState<Record<string, string>>({});
     const [plaidImportPending, setPlaidImportPending] = useState(false);
     const [plaidMessage, setPlaidMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [plaidItems, setPlaidItems] = useState<PlaidItem[]>([]);
+    const [syncingItemGuid, setSyncingItemGuid] = useState<string | null>(null);
+    const [dmSuggestions, setDmSuggestions] = useState<SyncSuggestion[] | null>(null);
+    const [dmInstitution, setDmInstitution] = useState('');
+
+    const loadPlaidItems = useCallback(() => {
+        plaidListItems().then(r => setPlaidItems(r.items)).catch(() => {});
+    }, []);
+
+    useEffect(() => { loadPlaidItems(); }, [loadPlaidItems]);
+
+    const handlePlaidSyncNow = async (item: PlaidItem) => {
+        setSyncingItemGuid(item.guid);
+        setPlaidMessage(null);
+        try {
+            const result = await plaidSync(item.guid);
+            if (result.count > 0) {
+                setDmInstitution(item.institution_name);
+                setDmSuggestions(result.suggestions);
+            } else {
+                setPlaidMessage({ type: 'success', text: t('plaid.syncNone') });
+            }
+            loadPlaidItems();
+        } catch (e) {
+            // The backend returns the literal "reconnect_required" for Plaid's
+            // ITEM_LOGIN_REQUIRED — map it to the re-auth guidance message.
+            const text = e instanceof Error && e.message === 'reconnect_required'
+                ? t('plaid.reconnectNeeded')
+                : t('plaid.syncError').replace('{{institution}}', item.institution_name);
+            setPlaidMessage({ type: 'error', text });
+        } finally {
+            setSyncingItemGuid(null);
+        }
+    };
+
+    const handlePlaidDisconnect = async (item: PlaidItem) => {
+        if (!window.confirm(t('plaid.disconnectConfirm'))) return;
+        try {
+            await plaidDisconnect(item.guid);
+            setPlaidMessage({ type: 'success', text: t('plaid.disconnected') });
+            loadPlaidItems();
+        } catch (e) {
+            setPlaidMessage({
+                type: 'error',
+                text: e instanceof Error ? e.message : t('plaid.syncError').replace('{{institution}}', item.institution_name),
+            });
+        }
+    };
 
     useEffect(() => {
         getAccounts().then(data => {
@@ -264,6 +313,7 @@ export default function DataManagement() {
             await plaidLink(plaidItem.guid, mappings, plaidImportPending);
             setPlaidStep('done');
             setPlaidMessage({ type: 'success', text: `${t('plaid.connected')}: ${plaidItem.institution}` });
+            loadPlaidItems();
         } catch (e: any) {
             setPlaidMessage({ type: 'error', text: e.message });
         } finally {
@@ -423,7 +473,7 @@ export default function DataManagement() {
                         </label>
                         <div style={{ marginTop: '1rem' }}>
                             <button className="btn btn-primary" onClick={handleSubmitMappings} disabled={plaidConnecting}>
-                                {plaidConnecting ? t('plaid.connecting') : t('plaid.connected')}
+                                {plaidConnecting ? t('plaid.connecting') : t('plaid.save')}
                             </button>
                         </div>
                     </div>
@@ -432,7 +482,50 @@ export default function DataManagement() {
                 {plaidStep === 'done' && (
                     <p>{t('plaid.connected')} ✓</p>
                 )}
+
+                {plaidItems.length > 0 && (
+                    <div className="plaid-items">
+                        <h3>{t('plaid.connectedBanks')}</h3>
+                        {plaidItems.map(item => (
+                            <div key={item.guid} className="plaid-item-row">
+                                <span>
+                                    <strong>{item.institution_name}</strong>
+                                    {' — '}
+                                    {item.last_synced_at
+                                        ? t('plaid.lastSynced').replace('{{date}}', new Date(item.last_synced_at).toLocaleString())
+                                        : t('plaid.neverSynced')}
+                                </span>
+                                <span className="plaid-item-actions">
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={() => handlePlaidSyncNow(item)}
+                                        disabled={syncingItemGuid !== null}
+                                    >
+                                        {syncingItemGuid === item.guid
+                                            ? t('plaid.syncing').replace('{{institution}}', item.institution_name)
+                                            : t('plaid.syncNow')}
+                                    </button>
+                                    <button className="btn btn-danger" onClick={() => handlePlaidDisconnect(item)}>
+                                        {t('plaid.disconnect')}
+                                    </button>
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </section>
+
+            {dmSuggestions && (
+                <ImportMatcher
+                    institutionName={dmInstitution}
+                    suggestions={dmSuggestions}
+                    onClose={() => setDmSuggestions(null)}
+                    onImported={(count) => {
+                        setDmSuggestions(null);
+                        setPlaidMessage({ type: 'success', text: t('plaid.importSuccess').replace('{{count}}', String(count)) });
+                    }}
+                />
+            )}
         </div>
     );
 }

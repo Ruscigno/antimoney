@@ -185,8 +185,14 @@ export default function AccountRegister() {
                 setSyncMessage(t('plaid.syncNone'));
                 setTimeout(() => setSyncMessage(null), 3000);
             }
-        } catch {
-            setSyncMessage(t('plaid.syncError').replace('{{institution}}', institutionName));
+        } catch (e) {
+            // "reconnect_required" is the backend's marker for ITEM_LOGIN_REQUIRED:
+            // tell the user to re-authorize instead of showing a generic failure.
+            setSyncMessage(
+                e instanceof Error && e.message === 'reconnect_required'
+                    ? t('plaid.reconnectNeeded')
+                    : t('plaid.syncError').replace('{{institution}}', institutionName),
+            );
         } finally {
             setSyncing(false);
         }
