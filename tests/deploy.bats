@@ -17,6 +17,7 @@ setup() {
   cat > "$STUB_BIN/gcloud" <<EOF
 #!/usr/bin/env bash
 echo "project=\${CLOUDSDK_CORE_PROJECT:-UNSET} args=\$*" >> "$CALLS"
+if [ -n "\${STUB_BUILD_FAIL:-}" ] && [ "\$1" = "builds" ]; then exit 1; fi
 case "\$1 \$2 \$3" in
   "compute instances get-serial-port-output")
     if [ -n "\${STUB_SERIAL_ERR:-}" ]; then
@@ -215,4 +216,25 @@ ENVEOF
   [ "$BACKEND_URL" = "https://backend.example" ]
   [ "$FRONTEND_URL" = "https://frontend.example" ]
   [ "$STAGING_BUCKET" = "stage-bucket" ]
+}
+
+@test "deploy_frontend restores the Dockerfiles even when the build fails (trap on error)" {
+  PROJECT_ID="my-proj"; require_project
+  STAGING_BUCKET="bucket"
+  export STUB_BUILD_FAIL=1
+  cd "$BATS_TEST_TMPDIR"
+  mkdir -p frontend
+  echo "DEV"  > frontend/Dockerfile
+  echo "PROD" > frontend/Dockerfile.prod
+
+  run deploy_frontend
+  [ "$status" -ne 0 ]                                  # build failure propagates
+
+  # Trap restored the originals despite the failure.
+  [ "$(cat frontend/Dockerfile)" = "DEV" ]
+  [ "$(cat frontend/Dockerfile.prod)" = "PROD" ]
+  [ ! -f frontend/Dockerfile.dev ]
+
+  # The service deploy was never reached after the failed build.
+  ! grep -q 'run deploy antimoney-frontend' "$CALLS"
 }

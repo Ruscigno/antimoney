@@ -151,14 +151,18 @@ deploy_frontend() {
   # Ctrl+C — so an interrupted build never leaves the workspace half-swapped.
   (
     cd frontend || exit 1
-    trap restore_dockerfiles EXIT
+    # Preserve the failing exit status: a plain `trap restore EXIT` would let
+    # restore_dockerfiles' own success (0) mask a failed build. Capture $? and
+    # re-exit it so the subshell reflects the build result.
+    # shellcheck disable=SC2154  # rc is assigned in the same trap action
+    trap 'rc=$?; restore_dockerfiles; exit "$rc"' EXIT
     trap 'restore_dockerfiles; exit 130' INT TERM
 
     mv Dockerfile Dockerfile.dev
     mv Dockerfile.prod Dockerfile
     gcloud builds submit --tag "${REPO_URL}/frontend:latest" . \
       --gcs-source-staging-dir "gs://${STAGING_BUCKET}/frontend"
-  )
+  ) || return 1  # build failed (Dockerfiles already restored by trap) — do not deploy
 
   gcloud run deploy antimoney-frontend \
     --image "${REPO_URL}/frontend:latest" \
