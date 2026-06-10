@@ -166,7 +166,9 @@ immediately before a Plaid call. The plaintext token is never persisted and neve
    category names are resolved in one batched query.
 4. The overlay lists rows: date, description, amount, the (fixed) linked bank account,
    an editable **category account** dropdown (pre-filled with the suggestion when
-   present), and an include/exclude toggle.
+   present), an include/exclude toggle, and a **Dismiss** action (`POST /dismiss`)
+   that permanently hides the suggestion (excluded rows merely reappear next sync;
+   dismissed ones never do).
 5. User fixes uncategorized rows and confirms → `POST /data/plaid/import` with
    **only** `{ transaction_id, category_account_guid }` per row.
 6. Backend, per row, loads date/description/amount/bank-account **from staging** (a
@@ -243,6 +245,7 @@ type Categorizer interface {
 | `POST /link` | Persist 1:1 account mappings + `import_pending` |
 | `POST /sync` | Run `/transactions/sync`; return deduped, categorized suggestions |
 | `POST /import` | Create transactions for confirmed rows (cleared); financial data read from staging |
+| `POST /dismiss` | Permanently hide staged suggestions (rows kept for dedupe/correlation) |
 | `DELETE /items/{guid}` | Disconnect an Item and clear links (aborts if Plaid removal fails) |
 | `GET /items` | List connected Items (non-sensitive fields) for the Connected-banks UI |
 
@@ -265,4 +268,10 @@ multi-currency display; encryption-key rotation.
 - **Amounts assume 2-decimal currencies.** Plaid float amounts are converted with a
   fixed denominator of 100 (cents) — correct for CAD/USD (the MVP scope), wrong for
   zero-decimal (JPY) or 3-decimal (BHD) currencies, which would need the account
-  commodity's exponent (see the comment in `client.go` `SyncTransactions`).
+  commodity's exponent (see ADR-001 in `docs/adr.md`).
+- **Staging lifecycle.** Staged rows persist until imported, dismissed, or the item is
+  disconnected (CASCADE). Rows for unmapped bank accounts stay invisible-but-staged and
+  surface automatically once the account is mapped. A bank-side `removed` for an
+  already-imported transaction is logged (book-vs-bank divergence) but never deletes the
+  user's books; a posted transaction whose value diverges from its imported pending
+  predecessor stays visible so the user can act on the correction.

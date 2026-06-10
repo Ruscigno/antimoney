@@ -109,4 +109,22 @@ func TestHistoryCategorizer(t *testing.T) {
 	if _, ok := cat.Suggest(ctx, res.BookGUID, PlaidTxn{Description: "100% JUICE"}); ok {
 		t.Fatal("unescaped LIKE metacharacter: '100% JUICE' must not match '100x JUICE'")
 	}
+
+	// SuggestBatch must mirror Suggest exactly: exact-priority, substring
+	// fallback, escaping, and empty for unknowns — in two queries total.
+	batch := cat.SuggestBatch(ctx, res.BookGUID, []string{
+		"Tim Hortons",      // exact beats newer substring → coffee
+		"tim hortons #123", // substring-only... exact match on the seeded "TIM HORTONS #123" → dining
+		"Unknown XYZ",      // no match
+		"100% JUICE",       // escape: no wildcard match
+	})
+	if batch[0] != coffee.GUID {
+		t.Fatalf("batch[0]: want coffee (exact priority), got %q", batch[0])
+	}
+	if batch[1] != dining.GUID {
+		t.Fatalf("batch[1]: want dining, got %q", batch[1])
+	}
+	if batch[2] != "" || batch[3] != "" {
+		t.Fatalf("batch[2,3]: want empty suggestions, got %q / %q", batch[2], batch[3])
+	}
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Account, SyncSuggestion } from '../types';
 import { t } from '../i18n';
-import { getAccounts, plaidImport } from '../api/client';
+import { getAccounts, plaidImport, plaidDismiss } from '../api/client';
 
 interface Props {
     institutionName: string;
@@ -26,7 +26,23 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
     );
     const [accounts, setAccounts] = useState<Account[]>([]);
     const [importing, setImporting] = useState(false);
+    const [dismissing, setDismissing] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+
+    // Permanently hide a suggestion the user never wants to import — otherwise
+    // it would reappear on every future sync.
+    const handleDismiss = async (transactionId: string) => {
+        setDismissing(transactionId);
+        setError(null);
+        try {
+            await plaidDismiss([transactionId]);
+            setRows(r => r.filter(row => row.suggestion.transaction_id !== transactionId));
+        } catch {
+            setError(t('plaid.importError'));
+        } finally {
+            setDismissing(null);
+        }
+    };
 
     useEffect(() => {
         getAccounts().then(data => {
@@ -63,7 +79,11 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                 category_account_guid: r.categoryGUID,
             }));
             const result = await plaidImport(payload);
-            if (result.failed && result.failed.length > 0) {
+            if (result.error) {
+                // Batch interrupted mid-way: report the partial progress and keep
+                // the modal open — retry is safe (server-side dedupe).
+                setError(t('plaid.importInterrupted').replace('{{imported}}', String(result.imported)));
+            } else if (result.failed && result.failed.length > 0) {
                 // Partial failure: keep the modal open so the user can retry —
                 // already-imported rows are deduped server-side on retry.
                 setError(
@@ -103,6 +123,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                                 <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colBankAccount')}</th>
                                 <th style={{ textAlign: 'left', padding: '4px 8px' }}>{t('plaid.colCategory')}</th>
                                 <th style={{ textAlign: 'center', padding: '4px 8px' }}>{t('plaid.colInclude')}</th>
+                                <th aria-label={t('plaid.dismiss')} />
                             </tr>
                         </thead>
                         <tbody>
@@ -133,6 +154,16 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                                             checked={row.included}
                                             onChange={() => toggleIncluded(i)}
                                         />
+                                    </td>
+                                    <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                                        <button
+                                            className="btn btn-secondary"
+                                            onClick={() => handleDismiss(row.suggestion.transaction_id)}
+                                            disabled={importing || dismissing === row.suggestion.transaction_id}
+                                            title={t('plaid.dismissHint')}
+                                        >
+                                            {t('plaid.dismiss')}
+                                        </button>
                                     </td>
                                 </tr>
                             ))}

@@ -19,16 +19,23 @@ CREATE TABLE plaid_staged_transactions (
     amount_denom           BIGINT      NOT NULL,
     pending                BOOLEAN     NOT NULL DEFAULT false,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (book_guid, transaction_id)
+    PRIMARY KEY (book_guid, transaction_id),
+    CHECK (amount_denom > 0)
 );
 
 CREATE INDEX idx_plaid_staged_item ON plaid_staged_transactions(item_guid);
 
--- DB backstop for the 1:1 link invariant (finding #7): two concurrent
--- LinkAccounts calls could both pass the application-level check. Defensive
--- cleanup first: keep the oldest holder of each plaid account_id per book and
--- strip the link from any later duplicates (no-op on healthy databases).
-UPDATE accounts SET metadata = metadata - 'plaid'
+-- DB backstop for the 1:1 link invariant: two concurrent LinkAccounts calls
+-- could both pass the application-level check. Defensive cleanup first: keep
+-- ONE holder of each plaid account_id per book (min(ctid) picks an arbitrary
+-- survivor — ctid is a physical position, not insertion order) and strip the
+-- link from the rest. No-op on healthy databases; NOT undone by the down
+-- migration (the stripped duplicates were invalid state with no canonical
+-- "correct" restore).
+UPDATE accounts
+SET metadata   = metadata - 'plaid',
+    updated_at = NOW(),
+    version    = version + 1
 WHERE metadata->'plaid'->>'account_id' IS NOT NULL
   AND ctid NOT IN (
     SELECT min(ctid)

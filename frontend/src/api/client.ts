@@ -165,11 +165,19 @@ export const plaidImport = (rows: {
     transaction_id: string;
     category_account_guid: string;
 }[]) =>
-    // failed lists the transaction_ids the backend could not import — callers
-    // must surface a partial failure instead of reporting blanket success.
-    fetchJSON<{ imported: number; failed?: string[] }>('/data/plaid/import', {
+    // failed lists transaction_ids the backend could not import; error is set
+    // when the batch was interrupted mid-way — callers must surface partial
+    // progress instead of reporting blanket success or blanket failure.
+    fetchJSON<{ imported: number; failed?: string[]; error?: string }>('/data/plaid/import', {
         method: 'POST',
         body: JSON.stringify({ rows }),
+    });
+
+// Permanently hide staged suggestions the user never wants to import.
+export const plaidDismiss = (transactionIds: string[]) =>
+    fetchJSON<{ dismissed: number }>('/data/plaid/dismiss', {
+        method: 'POST',
+        body: JSON.stringify({ transaction_ids: transactionIds }),
     });
 
 export const plaidDisconnect = (itemGuid: string) =>

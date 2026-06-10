@@ -34,6 +34,7 @@ func (h *PlaidHandler) Routes() chi.Router {
 	r.Post("/link", h.handleLink)
 	r.Post("/sync", h.handleSync)
 	r.Post("/import", h.handleImport)
+	r.Post("/dismiss", h.handleDismiss)
 	r.Delete("/items/{guid}", h.handleDisconnect)
 	r.Get("/items", h.handleListItems)
 	return r
@@ -154,10 +155,42 @@ func (h *PlaidHandler) handleImport(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.Import(r.Context(), req.Rows)
 	if err != nil {
 		log.Printf("plaid import: %v", err)
+		if result != nil && (result.Imported > 0 || len(result.Failed) > 0) {
+			// Mid-batch failure: report the partial progress honestly instead
+			// of a blanket 500 — already-imported rows are NOT a total failure,
+			// and a retry is safe (server-side dedupe).
+			handlers.WriteJSONPublic(w, http.StatusOK, map[string]interface{}{
+				"imported": result.Imported,
+				"failed":   result.Failed,
+				"error":    "import interrupted — retry for the remaining rows",
+			})
+			return
+		}
 		handlers.WriteErrorPublic(w, http.StatusInternalServerError, "import failed")
 		return
 	}
 	handlers.WriteJSONPublic(w, http.StatusOK, result)
+}
+
+func (h *PlaidHandler) handleDismiss(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TransactionIDs []string `json:"transaction_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.TransactionIDs) == 0 {
+		handlers.WriteErrorPublic(w, http.StatusBadRequest, "transaction_ids is required")
+		return
+	}
+	if len(req.TransactionIDs) > maxImportRows {
+		handlers.WriteErrorPublic(w, http.StatusBadRequest, "too many ids (max 500)")
+		return
+	}
+	n, err := h.svc.DismissStaged(r.Context(), req.TransactionIDs)
+	if err != nil {
+		log.Printf("plaid dismiss: %v", err)
+		handlers.WriteErrorPublic(w, http.StatusInternalServerError, "dismiss failed")
+		return
+	}
+	handlers.WriteJSONPublic(w, http.StatusOK, map[string]int{"dismissed": n})
 }
 
 func (h *PlaidHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) {

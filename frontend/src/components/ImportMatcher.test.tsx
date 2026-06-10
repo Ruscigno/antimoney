@@ -4,12 +4,13 @@ import ImportMatcher from './ImportMatcher';
 import type { Account, SyncSuggestion } from '../types';
 
 // Hoisted mocks so the vi.mock factory can reference them safely.
-const { getAccounts, plaidImport } = vi.hoisted(() => ({
+const { getAccounts, plaidImport, plaidDismiss } = vi.hoisted(() => ({
     getAccounts: vi.fn(),
     plaidImport: vi.fn(),
+    plaidDismiss: vi.fn(),
 }));
 
-vi.mock('../api/client', () => ({ getAccounts, plaidImport }));
+vi.mock('../api/client', () => ({ getAccounts, plaidImport, plaidDismiss }));
 // Return the key itself so assertions don't depend on translation text.
 vi.mock('../i18n', () => ({ t: (k: string) => k }));
 
@@ -46,6 +47,7 @@ const confirmBtn = () => screen.getByRole('button', { name: /confirmImport/ });
 beforeEach(() => {
     getAccounts.mockReset().mockResolvedValue(accounts);
     plaidImport.mockReset().mockResolvedValue({ imported: 1 });
+    plaidDismiss.mockReset().mockResolvedValue({ dismissed: 1 });
 });
 
 describe('ImportMatcher', () => {
@@ -105,6 +107,28 @@ describe('ImportMatcher', () => {
         expect(confirmBtn()).toBeEnabled();
         fireEvent.click(screen.getByRole('checkbox'));
         expect(confirmBtn()).toBeDisabled();
+    });
+
+    it('dismiss permanently hides the row via the API', async () => {
+        render(<ImportMatcher institutionName="RBC" suggestions={[suggestion()]} onClose={() => {}} onImported={() => {}} />);
+        await waitFor(() => expect(screen.getByRole('option', { name: 'Groceries' })).toBeInTheDocument());
+
+        fireEvent.click(screen.getByRole('button', { name: 'plaid.dismiss' }));
+
+        await waitFor(() => expect(plaidDismiss).toHaveBeenCalledWith(['tx1']));
+        await waitFor(() => expect(screen.queryByText('COFFEE SHOP')).not.toBeInTheDocument());
+    });
+
+    it('shows the interrupted message and stays open when the batch is cut short', async () => {
+        plaidImport.mockResolvedValue({ imported: 1, error: 'import interrupted — retry for the remaining rows' });
+        const onImported = vi.fn();
+        render(<ImportMatcher institutionName="RBC" suggestions={[suggestion({ suggested_category_guid: 'groc' })]} onClose={() => {}} onImported={onImported} />);
+        await waitFor(() => expect(screen.getByRole('option', { name: 'Groceries' })).toBeInTheDocument());
+
+        fireEvent.click(confirmBtn());
+
+        await waitFor(() => expect(screen.getByText(/plaid.importInterrupted/)).toBeInTheDocument());
+        expect(onImported).not.toHaveBeenCalled();
     });
 
     it('calls onClose when cancel is clicked', async () => {

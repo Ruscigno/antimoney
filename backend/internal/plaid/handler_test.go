@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -456,7 +457,9 @@ func TestPlaidRemovedAndModified(t *testing.T) {
 func TestPlaidPendingToPostedAfterImport(t *testing.T) {
 	h, fake, db, bookGUID, userID := setupTestHandler(t)
 	defer db.Teardown(context.Background())
-	posted := fakeTxn("txn-Q", "Coffee (posted)", 105, false)
+	// Same value as the pending txn: must be correlated away. (A diverged value
+	// staying visible is covered by TestPlaidPendingPostedValueDivergence.)
+	posted := fakeTxn("txn-Q", "Coffee (posted)", 100, false)
 	posted.PendingTransactionID = "txn-P"
 	fake.onePagePerSync = true
 	fake.deltaPages = []SyncDelta{
@@ -587,6 +590,330 @@ func TestIsPlaidDupViolation(t *testing.T) {
 	}
 	if isPlaidDupViolation(errors.New("plain")) {
 		t.Fatal("plain error must NOT classify as dup")
+	}
+}
+
+func importRows(t *testing.T, h *PlaidHandler, bookGUID, userID string, rows []ImportRow) ImportResult {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.handleImport(w, authedRequest("POST", "/import", map[string]interface{}{"rows": rows}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("import: got %d: %s", w.Code, w.Body)
+	}
+	var res ImportResult
+	json.NewDecoder(w.Body).Decode(&res)
+	return res
+}
+
+func expenseAccount(t *testing.T, db *testutil.TestDB, bookGUID, name string) string {
+	t.Helper()
+	accSvc := services.NewAccountService(db.Pool)
+	ctx := context.WithValue(context.Background(), auth.BookGUIDKey, bookGUID)
+	acc, err := accSvc.CreateAccount(ctx, services.CreateAccountRequest{Name: name, AccountType: models.AccountTypeExpense})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return acc.GUID
+}
+
+// TestPlaidRemovedAfterImport (#9a): a bank-side removal of an imported
+// transaction never deletes the user's books; only the staged copy goes.
+func TestPlaidRemovedAfterImport(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-X", "Coffee", 100, false)}},
+		{Removed: []string{"txn-X"}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+
+	doSync(t, h, itemGUID, bookGUID, userID)
+	importRows(t, h, bookGUID, userID, []ImportRow{{TransactionID: "txn-X", CategoryAccountGUID: cat}})
+
+	second := doSync(t, h, itemGUID, bookGUID, userID) // applies the removed delta
+	if second.Count != 0 {
+		t.Fatalf("expected 0 suggestions, got %d", second.Count)
+	}
+	var txCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM transactions WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' = 'txn-X'`,
+		bookGUID).Scan(&txCount); err != nil {
+		t.Fatal(err)
+	}
+	if txCount != 1 {
+		t.Fatalf("imported transaction must survive a bank-side removal, got %d", txCount)
+	}
+}
+
+// TestPlaidModifiedAfterImport (#9b): a modification arriving after import
+// updates staging but never silently rewrites the imported transaction.
+func TestPlaidModifiedAfterImport(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-X", "Coffee", 100, false)}},
+		{Modified: []PlaidTxn{fakeTxn("txn-X", "Coffee", 999, false)}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+
+	doSync(t, h, itemGUID, bookGUID, userID)
+	importRows(t, h, bookGUID, userID, []ImportRow{{TransactionID: "txn-X", CategoryAccountGUID: cat}})
+
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 0 {
+		t.Fatalf("modified-after-import must stay hidden (already imported), got %d", second.Count)
+	}
+	var splitCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM splits s JOIN transactions t ON t.guid = s.tx_guid
+		 WHERE t.book_guid = $1 AND t.metadata->'plaid'->>'transaction_id' = 'txn-X' AND s.value_num IN (100, -100)`,
+		bookGUID).Scan(&splitCount); err != nil {
+		t.Fatal(err)
+	}
+	if splitCount != 2 {
+		t.Fatalf("imported transaction value must not be rewritten, got %d original-value splits", splitCount)
+	}
+}
+
+// TestPlaidUnmappedAccountStaysStaged (#9c): rows for an unmapped bank account
+// stay invisible but staged, and surface once the account is mapped.
+func TestPlaidUnmappedAccountStaysStaged(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	other := fakeTxn("txn-Z", "Mystery", 100, false)
+	other.AccountID = "plaid-acct-999" // not mapped
+	fake.deltaPages = []SyncDelta{{Added: []PlaidTxn{other}}}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 0 {
+		t.Fatalf("unmapped account txn must not be suggested, got %d", first.Count)
+	}
+	var staged int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = 'txn-Z'`,
+		bookGUID).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
+	if staged != 1 {
+		t.Fatalf("unmapped txn must stay staged, got %d", staged)
+	}
+
+	// Map the account → the staged row becomes a suggestion.
+	accSvc := services.NewAccountService(db.Pool)
+	ctx := context.WithValue(context.Background(), auth.BookGUIDKey, bookGUID)
+	acc2, _ := accSvc.CreateAccount(ctx, services.CreateAccountRequest{Name: "Savings", AccountType: models.AccountTypeBank})
+	w := httptest.NewRecorder()
+	h.handleLink(w, authedRequest("POST", "/link", map[string]interface{}{
+		"item_guid": itemGUID,
+		"mappings":  []map[string]string{{"account_id": "plaid-acct-999", "account_guid": acc2.GUID}},
+	}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("link second account: %d: %s", w.Code, w.Body)
+	}
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 1 || second.Suggestions[0].TransactionID != "txn-Z" {
+		t.Fatalf("after mapping, staged txn must surface, got %+v", second.Suggestions)
+	}
+}
+
+// TestPlaidImportFailedPaths (#9d): never-staged ids and malformed category
+// ids land in failed[], not in a 500.
+func TestPlaidImportFailedPaths(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+	doSync(t, h, itemGUID, bookGUID, userID)
+
+	res := importRows(t, h, bookGUID, userID, []ImportRow{
+		{TransactionID: "txn-never-staged", CategoryAccountGUID: cat},
+		{TransactionID: "txn-001", CategoryAccountGUID: "not-a-uuid"},
+	})
+	if res.Imported != 0 || len(res.Failed) != 2 {
+		t.Fatalf("expected 0 imported / 2 failed, got %d / %v", res.Imported, res.Failed)
+	}
+}
+
+// TestPlaidConcurrentImports (#9e): two truly concurrent imports of the same
+// rows produce exactly one transaction per row (dedupe + unique-index backstop).
+func TestPlaidConcurrentImports(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+
+	rows := make([]ImportRow, 0, len(first.Suggestions))
+	for _, s := range first.Suggestions {
+		rows = append(rows, ImportRow{TransactionID: s.TransactionID, CategoryAccountGUID: cat})
+	}
+
+	ctx := context.WithValue(context.Background(), auth.BookGUIDKey, bookGUID)
+	ctx = context.WithValue(ctx, auth.UserIDKey, userID)
+	results := make([]*ImportResult, 2)
+	errs := make([]error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = h.svc.Import(ctx, rows)
+		}(i)
+	}
+	wg.Wait()
+
+	total := 0
+	for i := 0; i < 2; i++ {
+		if errs[i] != nil {
+			t.Fatalf("concurrent import %d errored: %v", i, errs[i])
+		}
+		total += results[i].Imported
+		if len(results[i].Failed) != 0 {
+			t.Fatalf("concurrent import %d reported failures: %v", i, results[i].Failed)
+		}
+	}
+	if total != len(rows) {
+		t.Fatalf("expected %d total imported across both runs, got %d", len(rows), total)
+	}
+	var txCount int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM transactions WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' IS NOT NULL`,
+		bookGUID).Scan(&txCount); err != nil {
+		t.Fatal(err)
+	}
+	if txCount != len(rows) {
+		t.Fatalf("expected exactly %d plaid transactions in DB, got %d", len(rows), txCount)
+	}
+}
+
+// TestPlaidPendingPostedRace (M1): a posted txn staged before its pending
+// predecessor's import committed must be hidden from suggestions and skipped
+// by import (same value).
+func TestPlaidPendingPostedRace(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Coffee", 100, true)}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+
+	doSync(t, h, itemGUID, bookGUID, userID)
+	importRows(t, h, bookGUID, userID, []ImportRow{{TransactionID: "txn-P", CategoryAccountGUID: cat}})
+
+	// Simulate the race: the posted txn-Q was staged by a concurrent sync that
+	// ran BEFORE txn-P's import committed (so stageDelta's correlation missed).
+	if _, err := db.Pool.Exec(context.Background(),
+		`INSERT INTO plaid_staged_transactions
+			(book_guid, item_guid, transaction_id, pending_transaction_id, plaid_account_id, post_date, description, amount_num, amount_denom, pending)
+		 VALUES ($1, $2, 'txn-Q', 'txn-P', 'plaid-acct-001', '2026-06-05', 'Coffee (posted)', 100, 100, false)`,
+		bookGUID, itemGUID); err != nil {
+		t.Fatal(err)
+	}
+
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if res.Count != 0 {
+		t.Fatalf("race-staged posted txn (same value) must be hidden, got %d: %+v", res.Count, res.Suggestions)
+	}
+	imp := importRows(t, h, bookGUID, userID, []ImportRow{{TransactionID: "txn-Q", CategoryAccountGUID: cat}})
+	if imp.Imported != 0 || len(imp.Failed) != 0 {
+		t.Fatalf("import of race-staged posted txn must be a benign skip, got %d / %v", imp.Imported, imp.Failed)
+	}
+	var txCount int
+	db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM transactions WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' IN ('txn-P','txn-Q')`,
+		bookGUID).Scan(&txCount)
+	if txCount != 1 {
+		t.Fatalf("expected exactly 1 transaction (no pending→posted duplicate), got %d", txCount)
+	}
+}
+
+// TestPlaidPendingPostedValueDivergence (M2): a posted txn whose value differs
+// from the imported pending must stay visible as a suggestion.
+func TestPlaidPendingPostedValueDivergence(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	posted := fakeTxn("txn-Q", "Coffee + tip", 120, false) // diverges from 100
+	posted.PendingTransactionID = "txn-P"
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Coffee", 100, true)}},
+		{Removed: []string{"txn-P"}, Added: []PlaidTxn{posted}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+
+	doSync(t, h, itemGUID, bookGUID, userID)
+	importRows(t, h, bookGUID, userID, []ImportRow{{TransactionID: "txn-P", CategoryAccountGUID: cat}})
+
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 1 || second.Suggestions[0].TransactionID != "txn-Q" || second.Suggestions[0].AmountNum != 120 {
+		t.Fatalf("value-diverged posted txn must stay suggested, got %+v", second.Suggestions)
+	}
+}
+
+// TestPlaidDismiss (#4): dismissed staged rows never reappear as suggestions.
+func TestPlaidDismiss(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 2 {
+		t.Fatalf("expected 2 suggestions, got %d", first.Count)
+	}
+	w := httptest.NewRecorder()
+	h.handleDismiss(w, authedRequest("POST", "/dismiss", map[string]interface{}{
+		"transaction_ids": []string{"txn-001"},
+	}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss: got %d: %s", w.Code, w.Body)
+	}
+	var dis map[string]int
+	json.NewDecoder(w.Body).Decode(&dis)
+	if dis["dismissed"] != 1 {
+		t.Fatalf("expected 1 dismissed, got %d", dis["dismissed"])
+	}
+
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 1 || second.Suggestions[0].TransactionID != "txn-002" {
+		t.Fatalf("dismissed txn must not reappear, got %+v", second.Suggestions)
+	}
+}
+
+// TestPlaidSyncLockSkipsFetch (#5): a sync that cannot take the per-item
+// advisory lock serves staged suggestions without touching Plaid.
+func TestPlaidSyncLockSkipsFetch(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+	doSync(t, h, itemGUID, bookGUID, userID) // stages 2, pageIndex=1
+
+	// Hold the item's advisory lock on a separate connection.
+	lockConn, err := db.Pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockConn.Release()
+	if _, err := lockConn.Exec(context.Background(),
+		`SELECT pg_advisory_lock(hashtextextended($1, 0))`, itemGUID); err != nil {
+		t.Fatal(err)
+	}
+	defer lockConn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1, 0))`, itemGUID)
+
+	pagesBefore := fake.pageIndex
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if fake.pageIndex != pagesBefore {
+		t.Fatalf("locked sync must not fetch from Plaid (pageIndex %d -> %d)", pagesBefore, fake.pageIndex)
+	}
+	if res.Count != 2 {
+		t.Fatalf("locked sync must still serve staged suggestions, got %d", res.Count)
 	}
 }
 

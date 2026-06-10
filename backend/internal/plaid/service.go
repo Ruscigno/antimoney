@@ -266,50 +266,36 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		return nil, fmt.Errorf("decrypt access token: %w", err)
 	}
 
+	// Per-item advisory lock: concurrent syncs (a second tab, or auto-sync
+	// racing the manual button) would interleave /transactions/sync pagination,
+	// could persist a regressed cursor, and can trip Plaid's
+	// TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION. The loser skips fetching and
+	// serves the durable staged suggestions — correct and race-free.
 	hasMore := false
-	for i := 0; i < maxSyncPages; i++ {
-		delta, nextCursor, more, err := s.client.SyncTransactions(ctx, accessToken, cursor)
-		if err != nil {
-			// ITEM_LOGIN_REQUIRED must reach the user as "reconnect your bank",
-			// not as a generic failure.
-			if errors.Is(err, ErrReauthRequired) {
-				return nil, ErrReauthRequired
-			}
-			log.Printf("plaid SyncTransactions error: %v", err)
-			return nil, fmt.Errorf("sync failed")
-		}
-		// Stage durably BEFORE the cursor moves past this page: Plaid never
-		// re-sends data behind the cursor, so anything not persisted here would
-		// be lost if the response never reached the user. A failure below means
-		// the cursor stays put and a retry re-stages idempotently.
-		if err := s.stageDelta(ctx, bookGUID, itemGUID, delta); err != nil {
-			return nil, fmt.Errorf("stage sync delta: %w", err)
-		}
-		cursor = nextCursor
-		hasMore = more
-		if !more {
-			break
-		}
+	lockConn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire conn for sync lock: %w", err)
 	}
-
-	now := time.Now().UTC()
-	if _, err := s.pool.Exec(ctx,
-		`UPDATE plaid_items
-		 SET sync_cursor = $1, last_synced_at = $2, updated_at = $2, version = version + 1
-		 WHERE guid = $3 AND book_guid = $4`,
-		cursor, now, itemGUID, bookGUID,
-	); err != nil {
-		log.Printf("plaid sync: persist cursor: %v", err)
+	var gotLock bool
+	if err := lockConn.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, itemGUID,
+	).Scan(&gotLock); err != nil {
+		lockConn.Release()
+		return nil, fmt.Errorf("acquire sync lock: %w", err)
 	}
-	if _, err := s.pool.Exec(ctx,
-		`UPDATE accounts
-		 SET metadata = jsonb_set(COALESCE(metadata,'{}'), '{plaid,last_synced_at}', to_jsonb($1::text), true),
-		     updated_at = $2,
-		     version    = version + 1
-		 WHERE book_guid = $3 AND metadata->'plaid'->>'item_guid' = $4`,
-		now.Format(time.RFC3339), now, bookGUID, itemGUID,
-	); err != nil {
-		log.Printf("plaid sync: propagate last_synced_at: %v", err)
+	if gotLock {
+		hm, fetchErr := s.fetchAndStage(ctx, bookGUID, itemGUID, accessToken, cursor)
+		if _, unlockErr := lockConn.Exec(context.WithoutCancel(ctx),
+			`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, itemGUID); unlockErr != nil {
+			log.Printf("plaid sync: release lock for %s: %v", itemGUID, unlockErr)
+		}
+		lockConn.Release()
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		hasMore = hm
+	} else {
+		lockConn.Release()
 	}
 
 	bankAccountByPlaidID := make(map[string]struct{ GUID, Name string })
@@ -351,11 +337,21 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		`SELECT st.transaction_id, st.post_date, st.description, st.amount_num, st.amount_denom, st.plaid_account_id
 		 FROM plaid_staged_transactions st
 		 WHERE st.book_guid = $1 AND st.item_guid = $2
+		   AND NOT st.dismissed
 		   AND ($3 OR NOT st.pending)
 		   AND NOT EXISTS (
 		     SELECT 1 FROM transactions t
 		     WHERE t.book_guid = st.book_guid
 		       AND t.metadata->'plaid'->>'transaction_id' = st.transaction_id)
+		   -- pending→posted race defense: hide a posted txn whose pending
+		   -- predecessor was already imported WITH THE SAME VALUE (a diverged
+		   -- value stays visible so the user can act on the correction).
+		   AND (st.pending_transaction_id IS NULL OR NOT EXISTS (
+		     SELECT 1 FROM transactions t2
+		     JOIN splits s2 ON s2.tx_guid = t2.guid
+		     WHERE t2.book_guid = st.book_guid
+		       AND t2.metadata->'plaid'->>'transaction_id' = st.pending_transaction_id
+		       AND s2.value_num = st.amount_num AND s2.value_denom = st.amount_denom))
 		 ORDER BY st.post_date, st.transaction_id`,
 		bookGUID, itemGUID, importPending,
 	)
@@ -376,26 +372,50 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		return nil, fmt.Errorf("iterate staged transactions: %w", err)
 	}
 
-	suggestions := make([]SyncSuggestion, 0, len(staged))
-	catGUIDs := make(map[string]bool)
+	type mappedRow struct {
+		st   stagedTxn
+		bank struct{ GUID, Name string }
+	}
+	mapped := make([]mappedRow, 0, len(staged))
 	for _, st := range staged {
 		bank, ok := bankAccountByPlaidID[st.PlaidAccountID]
 		if !ok {
 			continue // unmapped bank account: the row stays staged
 		}
-		catGUID, _ := s.cat.Suggest(ctx, bookGUID, PlaidTxn{Description: st.Description})
-		if catGUID != "" {
-			catGUIDs[catGUID] = true
+		mapped = append(mapped, mappedRow{st: st, bank: bank})
+	}
+
+	// Categorize in a constant number of queries when supported (large syncs
+	// must stay inside the 30s request timeout); other Categorizer
+	// implementations fall back to per-row suggestion.
+	cats := make([]string, len(mapped))
+	if bc, ok := s.cat.(batchCategorizer); ok {
+		descs := make([]string, len(mapped))
+		for i, m := range mapped {
+			descs[i] = m.st.Description
+		}
+		cats = bc.SuggestBatch(ctx, bookGUID, descs)
+	} else {
+		for i, m := range mapped {
+			cats[i], _ = s.cat.Suggest(ctx, bookGUID, PlaidTxn{Description: m.st.Description})
+		}
+	}
+
+	suggestions := make([]SyncSuggestion, 0, len(mapped))
+	catGUIDs := make(map[string]bool)
+	for i, m := range mapped {
+		if cats[i] != "" {
+			catGUIDs[cats[i]] = true
 		}
 		suggestions = append(suggestions, SyncSuggestion{
-			TransactionID:         st.TransactionID,
-			Date:                  st.Date.Format("2006-01-02"),
-			Description:           st.Description,
-			AmountNum:             st.AmountNum,
-			AmountDenom:           st.AmountDenom,
-			BankAccountGUID:       bank.GUID,
-			BankAccountName:       bank.Name,
-			SuggestedCategoryGUID: catGUID,
+			TransactionID:         m.st.TransactionID,
+			Date:                  m.st.Date.Format("2006-01-02"),
+			Description:           m.st.Description,
+			AmountNum:             m.st.AmountNum,
+			AmountDenom:           m.st.AmountDenom,
+			BankAccountGUID:       m.bank.GUID,
+			BankAccountName:       m.bank.Name,
+			SuggestedCategoryGUID: cats[i],
 		})
 	}
 
@@ -433,12 +453,86 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	return &SyncResult{Count: len(suggestions), Suggestions: suggestions, HasMore: hasMore}, nil
 }
 
+// fetchAndStage pulls up to maxSyncPages of /transactions/sync, staging each
+// page durably BEFORE the cursor moves past it: Plaid never re-sends data
+// behind the cursor, so anything not persisted here would be lost if the
+// response never reached the user. A staging failure leaves the cursor put and
+// a retry re-stages idempotently. Returns whether more pages remain.
+func (s *PlaidService) fetchAndStage(ctx context.Context, bookGUID, itemGUID, accessToken, cursor string) (bool, error) {
+	hasMore := false
+	for i := 0; i < maxSyncPages; i++ {
+		delta, nextCursor, more, err := s.client.SyncTransactions(ctx, accessToken, cursor)
+		if err != nil {
+			// ITEM_LOGIN_REQUIRED must reach the user as "reconnect your bank",
+			// not as a generic failure.
+			if errors.Is(err, ErrReauthRequired) {
+				return false, ErrReauthRequired
+			}
+			log.Printf("plaid SyncTransactions error: %v", err)
+			return false, fmt.Errorf("sync failed")
+		}
+		if err := s.stageDelta(ctx, bookGUID, itemGUID, delta); err != nil {
+			return false, fmt.Errorf("stage sync delta: %w", err)
+		}
+		cursor = nextCursor
+		hasMore = more
+		if !more {
+			break
+		}
+	}
+
+	now := time.Now().UTC()
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE plaid_items
+		 SET sync_cursor = $1, last_synced_at = $2, updated_at = $2, version = version + 1
+		 WHERE guid = $3 AND book_guid = $4`,
+		cursor, now, itemGUID, bookGUID,
+	); err != nil {
+		log.Printf("plaid sync: persist cursor: %v", err)
+	}
+	if _, err := s.pool.Exec(ctx,
+		`UPDATE accounts
+		 SET metadata = jsonb_set(COALESCE(metadata,'{}'), '{plaid,last_synced_at}', to_jsonb($1::text), true),
+		     updated_at = $2,
+		     version    = version + 1
+		 WHERE book_guid = $3 AND metadata->'plaid'->>'item_guid' = $4`,
+		now.Format(time.RFC3339), now, bookGUID, itemGUID,
+	); err != nil {
+		log.Printf("plaid sync: propagate last_synced_at: %v", err)
+	}
+	return hasMore, nil
+}
+
 // stageDelta applies one /transactions/sync page to durable staging. Removed
 // ids are dropped; added and modified transactions are upserted. A posted
 // transaction whose pending predecessor was already imported is skipped
 // entirely — importing it again would duplicate the money movement.
 func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string, delta SyncDelta) error {
 	if len(delta.Removed) > 0 {
+		// Surface (but never auto-apply) bank-side removals of transactions the
+		// user already imported: deleting financial data behind the user's back
+		// is wrong, but the book-vs-bank divergence must not pass silently.
+		impRows, err := s.pool.Query(ctx,
+			`SELECT metadata->'plaid'->>'transaction_id' FROM transactions
+			 WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' = ANY($2)`,
+			bookGUID, delta.Removed,
+		)
+		if err != nil {
+			return fmt.Errorf("check removed against imported: %w", err)
+		}
+		for impRows.Next() {
+			var id string
+			if err := impRows.Scan(&id); err != nil {
+				impRows.Close()
+				return fmt.Errorf("scan removed-imported id: %w", err)
+			}
+			log.Printf("plaid sync: bank removed transaction %s which was already imported into book %s; books may diverge from the bank", id, bookGUID)
+		}
+		impRows.Close()
+		if err := impRows.Err(); err != nil {
+			return fmt.Errorf("iterate removed-imported ids: %w", err)
+		}
+
 		if _, err := s.pool.Exec(ctx,
 			`DELETE FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = ANY($2)`,
 			bookGUID, delta.Removed,
@@ -453,13 +547,25 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 				return fmt.Errorf("pending correlation for %s: %w", txn.TransactionID, err)
 			}
 			if imported {
-				if _, err := s.pool.Exec(ctx,
-					`DELETE FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = ANY($2)`,
-					bookGUID, []string{txn.PendingTransactionID, txn.TransactionID},
-				); err != nil {
-					return fmt.Errorf("drop replaced pending %s: %w", txn.PendingTransactionID, err)
+				match, err := s.importedValueMatches(ctx, bookGUID, txn.PendingTransactionID, txn.AmountNum, txn.AmountDenom)
+				if err != nil {
+					return fmt.Errorf("pending value check for %s: %w", txn.TransactionID, err)
 				}
-				continue
+				if match {
+					// Same value: the posted txn is the one already imported as
+					// pending — drop both staged copies and skip.
+					if _, err := s.pool.Exec(ctx,
+						`DELETE FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = ANY($2)`,
+						bookGUID, []string{txn.PendingTransactionID, txn.TransactionID},
+					); err != nil {
+						return fmt.Errorf("drop replaced pending %s: %w", txn.PendingTransactionID, err)
+					}
+					continue
+				}
+				// Value diverged (tips/adjustments): keep the posted txn staged so
+				// the user sees it as a suggestion instead of the book silently
+				// keeping the stale pending amount forever.
+				log.Printf("plaid sync: posted txn %s diverges in value from imported pending %s; keeping it as a suggestion", txn.TransactionID, txn.PendingTransactionID)
 			}
 		}
 		if _, err := s.pool.Exec(ctx,
@@ -495,6 +601,39 @@ func (s *PlaidService) transactionExists(ctx context.Context, bookGUID, plaidTxn
 		return false, err
 	}
 	return cnt > 0, nil
+}
+
+// importedValueMatches reports whether the transaction imported under
+// plaidTxnID carries a split with exactly (num, denom) — the category split is
+// written with the Plaid amount verbatim, so this detects pending→posted value
+// drift.
+func (s *PlaidService) importedValueMatches(ctx context.Context, bookGUID, plaidTxnID string, num, denom int64) (bool, error) {
+	var match bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM transactions t
+			JOIN splits s ON s.tx_guid = t.guid
+			WHERE t.book_guid = $1
+			  AND t.metadata->'plaid'->>'transaction_id' = $2
+			  AND s.value_num = $3 AND s.value_denom = $4)`,
+		bookGUID, plaidTxnID, num, denom,
+	).Scan(&match)
+	return match, err
+}
+
+// DismissStaged permanently hides staged transactions from future suggestions
+// (the rows are kept for dedupe/pending correlation; disconnect cascades them).
+func (s *PlaidService) DismissStaged(ctx context.Context, transactionIDs []string) (int, error) {
+	bookGUID := auth.BookGUIDFromCtx(ctx)
+	ct, err := s.pool.Exec(ctx,
+		`UPDATE plaid_staged_transactions SET dismissed = true
+		 WHERE book_guid = $1 AND transaction_id = ANY($2)`,
+		bookGUID, transactionIDs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return int(ct.RowsAffected()), nil
 }
 
 // ImportRow identifies a staged transaction and the category the user picked.
@@ -536,13 +675,14 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (*ImportRes
 			amountNum   int64
 			amountDenom int64
 			plaidAcctID string
+			pendingID   *string
 		)
 		err := s.pool.QueryRow(ctx,
-			`SELECT post_date, description, amount_num, amount_denom, plaid_account_id
+			`SELECT post_date, description, amount_num, amount_denom, plaid_account_id, pending_transaction_id
 			 FROM plaid_staged_transactions
 			 WHERE book_guid = $1 AND transaction_id = $2`,
 			bookGUID, row.TransactionID,
-		).Scan(&postDate, &description, &amountNum, &amountDenom, &plaidAcctID)
+		).Scan(&postDate, &description, &amountNum, &amountDenom, &plaidAcctID, &pendingID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Never staged, or already imported and cleaned up. A duplicate
 			// click on an imported row is benign; anything else is a failure.
@@ -577,6 +717,29 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (*ImportRes
 		}
 		if exists {
 			continue
+		}
+
+		// pending→posted race defense at import time: by now any concurrent
+		// import of the pending predecessor has committed, so this check is
+		// reliable even when staging happened mid-race. Same value → benign
+		// duplicate, skip; diverged value → the user explicitly confirmed the
+		// correction in the matcher, proceed (and log).
+		if pendingID != nil {
+			imported, err := s.transactionExists(ctx, bookGUID, *pendingID)
+			if err != nil {
+				return result, fmt.Errorf("pending correlation for %s: %w", row.TransactionID, err)
+			}
+			if imported {
+				match, err := s.importedValueMatches(ctx, bookGUID, *pendingID, amountNum, amountDenom)
+				if err != nil {
+					return result, fmt.Errorf("pending value check for %s: %w", row.TransactionID, err)
+				}
+				if match {
+					s.deleteStaged(ctx, bookGUID, row.TransactionID)
+					continue
+				}
+				log.Printf("plaid import: %s diverges in value from imported pending %s; importing as user-confirmed correction", row.TransactionID, *pendingID)
+			}
 		}
 
 		meta, _ := json.Marshal(map[string]interface{}{
