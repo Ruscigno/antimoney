@@ -53,7 +53,7 @@ beforeEach(() => {
     h.plaidLink.mockReset().mockResolvedValue(undefined);
     h.plaidListItems.mockReset().mockResolvedValue({ items: [] });
     h.plaidDisconnect.mockReset().mockResolvedValue(undefined);
-    h.plaidSync.mockReset().mockResolvedValue({ count: 0, suggestions: [] });
+    h.plaidSync.mockReset().mockResolvedValue({ count: 0, suggestions: [], has_more: false });
     h.plaidImport.mockReset().mockResolvedValue({ imported: 0 });
     h.onSuccess.fn = null;
     window.matchMedia = window.matchMedia || (vi.fn().mockImplementation((q: string) => ({

@@ -159,14 +159,11 @@ export const plaidSync = (itemGuid: string) =>
         body: JSON.stringify({ item_guid: itemGuid }),
     });
 
+// Only the staged transaction id and the chosen category cross the wire —
+// all financial data is resolved server-side from staging.
 export const plaidImport = (rows: {
     transaction_id: string;
-    bank_account_guid: string;
     category_account_guid: string;
-    description: string;
-    date: string;
-    amount_num: number;
-    amount_denom: number;
 }[]) =>
     // failed lists the transaction_ids the backend could not import — callers
     // must surface a partial failure instead of reporting blanket success.

@@ -78,14 +78,10 @@ describe('ImportMatcher', () => {
         fireEvent.click(confirmBtn());
 
         await waitFor(() => expect(onImported).toHaveBeenCalledWith(1));
+        // Only the staged id + chosen category cross the wire (server resolves
+        // amounts/dates from staging).
         expect(plaidImport).toHaveBeenCalledWith([
-            expect.objectContaining({
-                transaction_id: 'tx1',
-                bank_account_guid: 'bank1',
-                category_account_guid: 'groc',
-                amount_num: 542,
-                amount_denom: 100,
-            }),
+            { transaction_id: 'tx1', category_account_guid: 'groc' },
         ]);
     });
 

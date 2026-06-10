@@ -36,11 +36,14 @@ func NewTransactionService(pool *pgxpool.Pool) *TransactionService {
 
 // CreateTransactionRequest is the payload for creating a new transaction.
 type CreateTransactionRequest struct {
-	CustomID    string               `json:"custom_id"`
-	PostDate    time.Time            `json:"post_date"`
-	Description string               `json:"description"`
-	Metadata    json.RawMessage      `json:"metadata,omitempty"`
-	Splits      []CreateSplitRequest `json:"splits"`
+	CustomID    string    `json:"custom_id"`
+	PostDate    time.Time `json:"post_date"`
+	Description string    `json:"description"`
+	// Set programmatically only (e.g. the Plaid importer's dedupe key); never
+	// accepted from the public API body — a client could otherwise poison the
+	// plaid transaction_id dedupe keyspace or store unbounded JSONB.
+	Metadata json.RawMessage      `json:"-"`
+	Splits   []CreateSplitRequest `json:"splits"`
 }
 
 type CreateSplitRequest struct {

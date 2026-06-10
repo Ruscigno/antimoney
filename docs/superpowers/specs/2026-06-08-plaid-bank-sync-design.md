@@ -35,9 +35,8 @@ double-entry transactions marked *cleared*. All Plaid secrets and the long-lived
   categorizer is built behind an interface so these can be added later without rework.
 - **Multi-currency display.** RBC is CAD; amounts import correctly (the `gnc` engine is
   currency-agnostic), but `formatCurrency()` remains BRL-labeled. Accepted limitation.
-- Applying Plaid `modified`/`removed` sync deltas and reconciling `pending → posted`
-  transitions beyond not creating duplicates.
-- Update-mode/"reconnect" niceties beyond a basic disconnect + reconnect.
+- Update-mode/"reconnect" niceties beyond a basic disconnect + reconnect (a sync against
+  an item needing re-auth surfaces a "reconnect needed" message).
 
 ## 4. Architecture
 
@@ -96,6 +95,19 @@ Stored on `accounts.metadata` JSONB:
 Invariant: a given Plaid `account_id` maps to **one** Antimoney account, and an Antimoney
 account has **at most one** Plaid link. Enforced in the service on link creation.
 
+### 5.2b Staging table `plaid_staged_transactions` (migration `000010`)
+
+Every transaction fetched from `/transactions/sync` is staged durably **before** the
+cursor is persisted — Plaid never re-sends data behind the cursor, so without staging a
+dropped response or closed tab would lose those transactions permanently. Suggestions
+are rebuilt from staging on every sync (dismissed suggestions reappear until imported);
+rows are deleted on import; `removed` deltas delete staged rows, `modified` deltas
+upsert them; a posted transaction whose pending predecessor was already imported is
+skipped via `pending_transaction_id` correlation. The table is keyed on
+`(book_guid, transaction_id)` and cascades on item disconnect. Staging is also the
+**source of truth for import**: the client sends only `transaction_id` +
+`category_account_guid`; date/description/amount/bank-account are read server-side.
+
 ### 5.3 Dedupe key
 
 Each imported transaction stores its Plaid id on `transactions.metadata`:
@@ -140,25 +152,32 @@ immediately before a Plaid call. The plaintext token is never persisted and neve
 
 ### 6.3 Fetch → match → import
 
-1. `POST /data/plaid/sync { item_guid }` → backend `/transactions/sync` using the stored
-   cursor; advance and persist the cursor; set `last_synced_at = now`.
-2. **Filter:** keep `added` transactions for mapped accounts; if `import_pending` is false,
-   drop `pending` ones; drop any whose `transaction_id` already exists (dedupe).
-   (`modified`/`removed` deltas advance the cursor but are not applied in MVP — documented
-   follow-up.)
-3. For each remaining transaction, call `Categorizer.Suggest(book, txn)` → a suggested
-   counter account or none.
-4. Return suggestions to the frontend. The overlay lists rows: date, description, amount,
-   the (fixed) linked bank account, an editable **category account** dropdown
-   (pre-filled with the suggestion when present), and an include/exclude toggle.
-5. User fixes uncategorized rows and confirms → `POST /data/plaid/import` with the chosen
-   `category_account_guid` per row.
-6. Backend, per row, calls `CreateTransaction`: split 1 = linked bank account, split 2 =
-   chosen category account, `reconcile_state = 'c'`, and stores `plaid.transaction_id` in
-   metadata. The split value sign is derived from Plaid's amount convention (for
-   depository accounts a **positive** `amount` means money *leaving* the account); the
-   importer maps that to the bank-account split sign and negates it for the counter split.
-   Atomic per transaction. Returns the imported count.
+1. `POST /data/plaid/sync { item_guid }` → backend pages `/transactions/sync` (≤3 pages
+   per call): each page's `added`/`modified` are **staged** and `removed` ids dropped
+   from staging *before* the cursor is persisted; then `last_synced_at = now`. The
+   response carries `has_more` when the page cap stopped mid-stream.
+2. **Suggestions are rebuilt from staging** (durable — survive lost responses and
+   dismissed modals): staged rows for mapped accounts, minus already-imported ones
+   (SQL `NOT EXISTS` on the metadata dedupe key), minus `pending` ones when
+   `import_pending` is false. A posted transaction whose pending predecessor was already
+   imported is excluded via `pending_transaction_id`.
+3. For each suggestion, `Categorizer.Suggest(book, txn)` proposes a counter account
+   (normalized exact match first, then substring with LIKE metacharacters escaped);
+   category names are resolved in one batched query.
+4. The overlay lists rows: date, description, amount, the (fixed) linked bank account,
+   an editable **category account** dropdown (pre-filled with the suggestion when
+   present), and an include/exclude toggle.
+5. User fixes uncategorized rows and confirms → `POST /data/plaid/import` with
+   **only** `{ transaction_id, category_account_guid }` per row.
+6. Backend, per row, loads date/description/amount/bank-account **from staging** (a
+   tampered client cannot inject financial values), dedupes, and calls
+   `CreateTransaction`: split 1 = linked bank account, split 2 = chosen category
+   account, `reconcile_state = 'c'`, `plaid.transaction_id` in metadata. The split value
+   sign is derived from Plaid's amount convention (for depository accounts a
+   **positive** `amount` means money *leaving* the account). Atomic per transaction;
+   imported rows are removed from staging; the response reports
+   `{ imported, failed[] }`. A partial unique index on the metadata dedupe key is the
+   DB-level idempotency backstop against concurrent imports.
 
 ### 6.4 Disconnect
 
@@ -223,8 +242,9 @@ type Categorizer interface {
 | `POST /exchange` | Exchange `public_token`; create Item; return bank accounts |
 | `POST /link` | Persist 1:1 account mappings + `import_pending` |
 | `POST /sync` | Run `/transactions/sync`; return deduped, categorized suggestions |
-| `POST /import` | Create transactions for confirmed rows (cleared) |
-| `DELETE /items/{guid}` | Disconnect an Item and clear links |
+| `POST /import` | Create transactions for confirmed rows (cleared); financial data read from staging |
+| `DELETE /items/{guid}` | Disconnect an Item and clear links (aborts if Plaid removal fails) |
+| `GET /items` | List connected Items (non-sensitive fields) for the Connected-banks UI |
 
 ## 12. Follow-ups (post-MVP)
 

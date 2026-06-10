@@ -1,8 +1,8 @@
 package plaid
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -21,12 +21,24 @@ var ErrReauthRequired = errors.New("plaid item requires re-authentication")
 // the bank account (a purchase/payment).
 type PlaidTxn struct {
 	TransactionID string
-	Date          time.Time
-	Description   string
-	AmountNum     int64 // positive = debit from bank account
-	AmountDenom   int64
-	AccountID     string
-	Pending       bool
+	// PendingTransactionID links a posted transaction back to the pending
+	// transaction it replaces (Plaid issues a NEW id when a pending posts).
+	PendingTransactionID string
+	Date                 time.Time
+	Description          string
+	AmountNum            int64 // positive = debit from bank account
+	AmountDenom          int64
+	AccountID            string
+	Pending              bool
+}
+
+// SyncDelta is one page of /transactions/sync. Modified entries are full
+// transactions to re-stage; Removed lists transaction_ids to drop (e.g. a
+// pending transaction that posted under a new id).
+type SyncDelta struct {
+	Added    []PlaidTxn
+	Modified []PlaidTxn
+	Removed  []string
 }
 
 // PlaidAccount is a bank account from /accounts/get.
@@ -42,7 +54,7 @@ type PlaidClient interface {
 	CreateLinkToken(ctx context.Context, userID string) (linkToken string, err error)
 	ExchangePublicToken(ctx context.Context, publicToken string) (accessToken, itemID, institutionName string, err error)
 	GetAccounts(ctx context.Context, accessToken string) ([]PlaidAccount, error)
-	SyncTransactions(ctx context.Context, accessToken, cursor string) (added []PlaidTxn, nextCursor string, hasMore bool, err error)
+	SyncTransactions(ctx context.Context, accessToken, cursor string) (delta SyncDelta, nextCursor string, hasMore bool, err error)
 	RemoveItem(ctx context.Context, accessToken string) error
 }
 
@@ -127,17 +139,31 @@ func (c *realPlaidClient) GetAccounts(ctx context.Context, accessToken string) (
 	return out, nil
 }
 
-func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cursor string) ([]PlaidTxn, string, bool, error) {
+func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cursor string) (SyncDelta, string, bool, error) {
 	req := plaidapi.NewTransactionsSyncRequest(accessToken)
 	if cursor != "" {
 		req.SetCursor(cursor)
 	}
 	resp, _, err := c.api.PlaidApi.TransactionsSync(ctx).TransactionsSyncRequest(*req).Execute()
 	if err != nil {
-		return nil, "", false, plaidErr("SyncTransactions", err)
+		return SyncDelta{}, "", false, plaidErr("SyncTransactions", err)
 	}
-	added := make([]PlaidTxn, 0, len(resp.Added))
-	for _, t := range resp.Added {
+	delta := SyncDelta{
+		Added:    convertTxns(resp.Added),
+		Modified: convertTxns(resp.Modified),
+		Removed:  make([]string, 0, len(resp.Removed)),
+	}
+	for _, r := range resp.Removed {
+		delta.Removed = append(delta.Removed, r.GetTransactionId())
+	}
+	return delta, resp.GetNextCursor(), resp.GetHasMore(), nil
+}
+
+// convertTxns normalizes Plaid SDK transactions (used for both Added and
+// Modified — a modified transaction is simply re-staged with its new values).
+func convertTxns(in []plaidapi.Transaction) []PlaidTxn {
+	out := make([]PlaidTxn, 0, len(in))
+	for _, t := range in {
 		date, err := time.Parse("2006-01-02", t.GetDate())
 		if err != nil {
 			// Don't import a transaction with a zero date — log and skip at the
@@ -151,12 +177,14 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 		// fractions exactly: 0.29 * 100 evaluates to 28.999999999999996, so plain
 		// int64(f*100) would truncate it to 28 instead of 29. The integer cent
 		// values that result after rounding ARE exactly representable.
+		// (Accepted float boundary — see the ADR in docs/adr.md.)
 		amountNum := int64(math.Round(t.GetAmount() * 100))
-		added = append(added, PlaidTxn{
-			TransactionID: t.GetTransactionId(),
-			Date:          date,
-			Description:   t.GetName(),
-			AmountNum:     amountNum,
+		out = append(out, PlaidTxn{
+			TransactionID:        t.GetTransactionId(),
+			PendingTransactionID: t.GetPendingTransactionId(),
+			Date:                 date,
+			Description:          t.GetName(),
+			AmountNum:            amountNum,
 			// MVP limitation: denom 100 assumes 2-decimal currencies (CAD/USD).
 			// Zero-decimal (JPY) or 3-decimal (BHD) currencies would need the
 			// account commodity's exponent — see spec §13 Known limitations.
@@ -165,7 +193,7 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 			Pending:     t.GetPending(),
 		})
 	}
-	return added, resp.GetNextCursor(), resp.GetHasMore(), nil
+	return out
 }
 
 func (c *realPlaidClient) RemoveItem(ctx context.Context, accessToken string) error {
@@ -174,19 +202,28 @@ func (c *realPlaidClient) RemoveItem(ctx context.Context, accessToken string) er
 	return plaidErr("RemoveItem", err)
 }
 
-// plaidErr logs the underlying Plaid error server-side (so production failures are
-// diagnosable) and returns a generic error for the caller. Plaid API errors carry
-// error_code / error_message / request_id — not credentials — so they are safe to
-// log; the Plaid SDK's error exposes the full response body via Body().
+// plaidErr logs a whitelisted subset of the Plaid error server-side (so
+// production failures are diagnosable without dumping a third-party-controlled
+// response body into application logs) and returns a generic error for the
+// caller. error_code/error_type/request_id are Plaid-defined enums/ids — never
+// credentials or free-form content.
 func plaidErr(op string, err error) error {
 	if err == nil {
 		return nil
 	}
 	if e, ok := err.(interface{ Body() []byte }); ok {
-		body := e.Body()
-		log.Printf("plaid %s error: %v; body=%s", op, err, body)
-		if bytes.Contains(body, []byte("ITEM_LOGIN_REQUIRED")) {
-			return ErrReauthRequired
+		var pe struct {
+			ErrorCode string `json:"error_code"`
+			ErrorType string `json:"error_type"`
+			RequestID string `json:"request_id"`
+		}
+		if jsonErr := json.Unmarshal(e.Body(), &pe); jsonErr == nil && pe.ErrorCode != "" {
+			log.Printf("plaid %s error: code=%s type=%s request_id=%s", op, pe.ErrorCode, pe.ErrorType, pe.RequestID)
+			if pe.ErrorCode == "ITEM_LOGIN_REQUIRED" {
+				return ErrReauthRequired
+			}
+		} else {
+			log.Printf("plaid %s error: %v (unparseable error body)", op, err)
 		}
 	} else {
 		log.Printf("plaid %s error: %v", op, err)

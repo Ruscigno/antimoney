@@ -162,4 +162,6 @@ export interface SyncSuggestion {
 export interface SyncResult {
     count: number;
     suggestions: SyncSuggestion[];
+    // True when the server's page cap stopped mid-stream — sync again for more.
+    has_more: boolean;
 }

@@ -13,10 +13,13 @@ type fakePlaidClient struct {
 	itemID      string
 	institution string
 	accounts    []PlaidAccount
-	txPages     [][]PlaidTxn // one slice per SyncTransactions call
+	deltaPages  []SyncDelta // one delta per SyncTransactions call
 	pageIndex   int
 	removeErr   error
 	syncErr     error // returned by SyncTransactions when set
+	// onePagePerSync reports has_more=false after every page, so each Sync()
+	// call consumes exactly one page (simulates deltas arriving over time).
+	onePagePerSync bool
 }
 
 func newFakeClient() *fakePlaidClient {
@@ -28,8 +31,8 @@ func newFakeClient() *fakePlaidClient {
 		accounts: []PlaidAccount{
 			{AccountID: "plaid-acct-001", Name: "Plaid Checking", Mask: "0000", Type: "depository"},
 		},
-		txPages: [][]PlaidTxn{
-			{
+		deltaPages: []SyncDelta{
+			{Added: []PlaidTxn{
 				{
 					TransactionID: "txn-001",
 					Date:          time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
@@ -48,7 +51,7 @@ func newFakeClient() *fakePlaidClient {
 					AccountID:     "plaid-acct-001",
 					Pending:       false,
 				},
-			},
+			}},
 		},
 	}
 }
@@ -65,16 +68,19 @@ func (f *fakePlaidClient) GetAccounts(_ context.Context, _ string) ([]PlaidAccou
 	return f.accounts, nil
 }
 
-func (f *fakePlaidClient) SyncTransactions(_ context.Context, _, _ string) ([]PlaidTxn, string, bool, error) {
+func (f *fakePlaidClient) SyncTransactions(_ context.Context, _, _ string) (SyncDelta, string, bool, error) {
 	if f.syncErr != nil {
-		return nil, "", false, f.syncErr
+		return SyncDelta{}, "", false, f.syncErr
 	}
-	if f.pageIndex >= len(f.txPages) {
-		return nil, fmt.Sprintf("cursor-%d", f.pageIndex), false, nil
+	if f.pageIndex >= len(f.deltaPages) {
+		return SyncDelta{}, fmt.Sprintf("cursor-%d", f.pageIndex), false, nil
 	}
-	page := f.txPages[f.pageIndex]
+	page := f.deltaPages[f.pageIndex]
 	f.pageIndex++
-	hasMore := f.pageIndex < len(f.txPages)
+	hasMore := f.pageIndex < len(f.deltaPages)
+	if f.onePagePerSync {
+		hasMore = false
+	}
 	return page, fmt.Sprintf("cursor-%d", f.pageIndex), hasMore, nil
 }
 

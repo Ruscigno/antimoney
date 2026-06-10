@@ -42,11 +42,17 @@ export default function DataManagement() {
         setPlaidMessage(null);
         try {
             const result = await plaidSync(item.guid);
+            const moreSuffix = result.has_more ? ` ${t('plaid.syncMore')}` : '';
             if (result.count > 0) {
+                // Spec §6.2: report "<N> new transactions" AND open the matcher.
+                setPlaidMessage({
+                    type: 'success',
+                    text: t('plaid.syncSuccess').replace('{{count}}', String(result.count)) + moreSuffix,
+                });
                 setDmInstitution(item.institution_name);
                 setDmSuggestions(result.suggestions);
             } else {
-                setPlaidMessage({ type: 'success', text: t('plaid.syncNone') });
+                setPlaidMessage({ type: 'success', text: t('plaid.syncNone') + moreSuffix });
             }
             loadPlaidItems();
         } catch (e) {

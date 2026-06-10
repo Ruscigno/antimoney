@@ -177,12 +177,13 @@ export default function AccountRegister() {
         setSyncMessage(t('plaid.syncing').replace('{{institution}}', institutionName));
         try {
             const result = await plaidSync(itemGUID);
+            const moreSuffix = result.has_more ? ` ${t('plaid.syncMore')}` : '';
             if (result.count > 0) {
-                setSyncMessage(t('plaid.syncSuccess').replace('{{count}}', String(result.count)));
+                setSyncMessage(t('plaid.syncSuccess').replace('{{count}}', String(result.count)) + moreSuffix);
                 setImportSuggestions(result.suggestions);
                 setImportInstitution(institutionName);
             } else {
-                setSyncMessage(t('plaid.syncNone'));
+                setSyncMessage(t('plaid.syncNone') + moreSuffix);
                 setTimeout(() => setSyncMessage(null), 3000);
             }
         } catch (e) {
@@ -224,7 +225,7 @@ export default function AccountRegister() {
     useEffect(() => {
         const plaidMeta = (account?.metadata as any)?.plaid as PlaidAccountMeta | undefined;
         if (plaidMeta?.item_guid && shouldAutoSyncToday(plaidMeta)) {
-            triggerSync(plaidMeta.item_guid, account?.name ?? 'Bank');
+            triggerSync(plaidMeta.item_guid, plaidMeta.institution_name ?? account?.name ?? 'Bank');
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [account?.guid]);
@@ -274,8 +275,8 @@ export default function AccountRegister() {
                                 <button
                                     className="btn btn-secondary"
                                     onClick={() => {
-                                        const meta = (account.metadata as any).plaid as { item_guid: string };
-                                        triggerSync(meta.item_guid, account.name);
+                                        const meta = (account.metadata as any).plaid as PlaidAccountMeta;
+                                        if (meta.item_guid) triggerSync(meta.item_guid, meta.institution_name ?? account.name);
                                     }}
                                     disabled={syncing}
                                 >

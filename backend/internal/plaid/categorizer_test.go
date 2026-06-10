@@ -92,4 +92,21 @@ func TestHistoryCategorizer(t *testing.T) {
 	if got != coffee.GUID {
 		t.Fatalf("exact match must take priority: got %q, want coffee GUID %q", got, coffee.GUID)
 	}
+
+	// LIKE metacharacters must match literally: "100% JUICE" must NOT match a
+	// prior "FRESH 100x JUICE BAR" (an unescaped % would wildcard-match it).
+	_, err = txSvc.CreateTransaction(ctx, services.CreateTransactionRequest{
+		PostDate:    time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC),
+		Description: "FRESH 100x JUICE BAR",
+		Splits: []services.CreateSplitRequest{
+			{AccountGUID: bank.GUID, ValueNum: -500, ValueDenom: 100, QuantityNum: -500, QuantityDenom: 100},
+			{AccountGUID: dining.GUID, ValueNum: 500, ValueDenom: 100, QuantityNum: 500, QuantityDenom: 100},
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed wildcard-bait transaction: %v", err)
+	}
+	if _, ok := cat.Suggest(ctx, res.BookGUID, PlaidTxn{Description: "100% JUICE"}); ok {
+		t.Fatal("unescaped LIKE metacharacter: '100% JUICE' must not match '100x JUICE'")
+	}
 }

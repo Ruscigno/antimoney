@@ -47,12 +47,19 @@ func (c *HistoryCategorizer) Suggest(ctx context.Context, bookGUID string, txn P
 		ORDER BY t.post_date DESC
 		LIMIT 1`
 
-	for _, cond := range []string{
-		`LOWER(TRIM(t.description)) = $2`,
-		`LOWER(t.description) LIKE '%' || $2 || '%'`,
+	// Escape LIKE metacharacters for the substring pass — bank descriptions
+	// like "100% JUICE" must match literally, not as wildcards.
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+
+	for _, attempt := range []struct {
+		cond  string
+		param string
+	}{
+		{`LOWER(TRIM(t.description)) = $2`, q},
+		{`LOWER(t.description) LIKE '%' || $2 || '%' ESCAPE '\'`, escaped},
 	} {
 		var accountGUID string
-		err := c.pool.QueryRow(ctx, fmt.Sprintf(baseSQL, cond), bookGUID, q).Scan(&accountGUID)
+		err := c.pool.QueryRow(ctx, fmt.Sprintf(baseSQL, attempt.cond), bookGUID, attempt.param).Scan(&accountGUID)
 		if err == nil {
 			return accountGUID, true
 		}

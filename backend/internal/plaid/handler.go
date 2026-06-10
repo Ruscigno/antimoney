@@ -7,8 +7,16 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/user/antimoney/internal/handlers"
 )
+
+// isUUID rejects malformed ids at the boundary — a non-UUID would otherwise
+// fail the Postgres uuid cast deep in the service and surface as a 500.
+func isUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
+}
 
 // PlaidHandler is the thin HTTP layer over PlaidService.
 type PlaidHandler struct {
@@ -68,7 +76,7 @@ func (h *PlaidHandler) handleLink(w http.ResponseWriter, r *http.Request) {
 		Mappings      []AccountMapping `json:"mappings"`
 		ImportPending bool             `json:"import_pending"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemGUID == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !isUUID(req.ItemGUID) {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "item_guid is required")
 		return
 	}
@@ -100,7 +108,7 @@ func (h *PlaidHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ItemGUID string `json:"item_guid"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ItemGUID == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !isUUID(req.ItemGUID) {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "item_guid is required")
 		return
 	}
@@ -154,6 +162,10 @@ func (h *PlaidHandler) handleImport(w http.ResponseWriter, r *http.Request) {
 
 func (h *PlaidHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	itemGUID := chi.URLParam(r, "guid")
+	if !isUUID(itemGUID) {
+		handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
+		return
+	}
 	if err := h.svc.Disconnect(r.Context(), itemGUID); err != nil {
 		if errors.Is(err, ErrItemNotFound) {
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")

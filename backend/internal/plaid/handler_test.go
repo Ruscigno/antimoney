@@ -6,9 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -114,17 +116,13 @@ func TestPlaidExchangeAndSync(t *testing.T) {
 		t.Fatalf("expected 2 suggestions, got %d", syncResp.Count)
 	}
 
-	// POST /import
+	// POST /import — only the staged id and the chosen category cross the wire;
+	// all financial data is resolved server-side from staging.
 	rows := make([]ImportRow, 0, len(syncResp.Suggestions))
 	for _, s := range syncResp.Suggestions {
 		rows = append(rows, ImportRow{
 			TransactionID:       s.TransactionID,
-			BankAccountGUID:     s.BankAccountGUID,
 			CategoryAccountGUID: expAcc.GUID,
-			Description:         s.Description,
-			Date:                s.Date,
-			AmountNum:           s.AmountNum,
-			AmountDenom:         s.AmountDenom,
 		})
 	}
 	w = httptest.NewRecorder()
@@ -348,6 +346,247 @@ func TestPlaidUniqueIndexBackstop(t *testing.T) {
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
 		t.Fatalf("expected 23505 unique violation, got %v", err)
+	}
+}
+
+// fakeTxn builds a PlaidTxn for the stub bank account.
+func fakeTxn(id, desc string, amount int64, pending bool) PlaidTxn {
+	return PlaidTxn{
+		TransactionID: id,
+		Date:          time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC),
+		Description:   desc,
+		AmountNum:     amount,
+		AmountDenom:   100,
+		AccountID:     "plaid-acct-001",
+		Pending:       pending,
+	}
+}
+
+// exchangeAndLink runs the connect flow and links the stub bank account.
+func exchangeAndLink(t *testing.T, h *PlaidHandler, db *testutil.TestDB, bookGUID, userID string, importPending bool) (itemGUID, bankGUID string) {
+	t.Helper()
+	accSvc := services.NewAccountService(db.Pool)
+	ctx := context.WithValue(context.Background(), auth.BookGUIDKey, bookGUID)
+	bank, err := accSvc.CreateAccount(ctx, services.CreateAccountRequest{Name: "Chequing", AccountType: models.AccountTypeBank})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	h.handleExchange(w, authedRequest("POST", "/exchange", map[string]string{"public_token": "tok"}, bookGUID, userID))
+	var ex struct {
+		ItemGUID string `json:"item_guid"`
+	}
+	json.NewDecoder(w.Body).Decode(&ex)
+
+	w = httptest.NewRecorder()
+	h.handleLink(w, authedRequest("POST", "/link", map[string]interface{}{
+		"item_guid":      ex.ItemGUID,
+		"mappings":       []map[string]string{{"account_id": "plaid-acct-001", "account_guid": bank.GUID}},
+		"import_pending": importPending,
+	}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("link: got %d: %s", w.Code, w.Body)
+	}
+	return ex.ItemGUID, bank.GUID
+}
+
+func doSync(t *testing.T, h *PlaidHandler, itemGUID, bookGUID, userID string) SyncResult {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.handleSync(w, authedRequest("POST", "/sync", map[string]string{"item_guid": itemGUID}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("sync: got %d: %s", w.Code, w.Body)
+	}
+	var res SyncResult
+	json.NewDecoder(w.Body).Decode(&res)
+	return res
+}
+
+// TestPlaidStagingSurvivesLostResponse proves finding #1's fix: suggestions
+// are durable — a dropped response or closed tab does not lose transactions
+// even though the Plaid cursor has already advanced.
+func TestPlaidStagingSurvivesLostResponse(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 2 {
+		t.Fatalf("first sync: expected 2 suggestions, got %d", first.Count)
+	}
+	// Pretend the response was lost (nothing imported). The fake has no more
+	// pages, so a second sync fetches nothing new — the suggestions must come
+	// back from staging anyway.
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 2 {
+		t.Fatalf("re-sync after lost response: expected 2 suggestions from staging, got %d", second.Count)
+	}
+}
+
+// TestPlaidRemovedAndModified covers the /transactions/sync deltas that were
+// previously ignored (finding #2).
+func TestPlaidRemovedAndModified(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-A", "Coffee", 100, false), fakeTxn("txn-B", "Books", 200, false)}},
+		{Modified: []PlaidTxn{fakeTxn("txn-B", "Books (corrected)", 999, false)}, Removed: []string{"txn-A"}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 2 {
+		t.Fatalf("first sync: expected 2, got %d", first.Count)
+	}
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 1 {
+		t.Fatalf("after removed+modified: expected 1 suggestion, got %d", second.Count)
+	}
+	got := second.Suggestions[0]
+	if got.TransactionID != "txn-B" || got.AmountNum != 999 || got.Description != "Books (corrected)" {
+		t.Fatalf("modified delta not applied: %+v", got)
+	}
+}
+
+// TestPlaidPendingToPostedAfterImport: a pending transaction that was imported
+// and later posts under a NEW transaction_id must not be suggested again
+// (correlated via PendingTransactionID — finding #2's duplication vector).
+func TestPlaidPendingToPostedAfterImport(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	posted := fakeTxn("txn-Q", "Coffee (posted)", 105, false)
+	posted.PendingTransactionID = "txn-P"
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Coffee", 100, true)}},
+		{Removed: []string{"txn-P"}, Added: []PlaidTxn{posted}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true) // import_pending on
+
+	accSvc := services.NewAccountService(db.Pool)
+	ctx := context.WithValue(context.Background(), auth.BookGUIDKey, bookGUID)
+	cat, _ := accSvc.CreateAccount(ctx, services.CreateAccountRequest{Name: "Dining", AccountType: models.AccountTypeExpense})
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 1 || first.Suggestions[0].TransactionID != "txn-P" {
+		t.Fatalf("expected pending txn-P suggested, got %+v", first.Suggestions)
+	}
+	w := httptest.NewRecorder()
+	h.handleImport(w, authedRequest("POST", "/import", map[string]interface{}{
+		"rows": []ImportRow{{TransactionID: "txn-P", CategoryAccountGUID: cat.GUID}},
+	}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("import pending: got %d: %s", w.Code, w.Body)
+	}
+
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 0 {
+		t.Fatalf("posted version of an imported pending txn must not re-surface, got %d: %+v", second.Count, second.Suggestions)
+	}
+}
+
+// TestPlaidCursorResumesAfterPageCap: the 3-page cap stops mid-stream with
+// has_more=true; the next sync resumes from the persisted cursor (finding #10
+// and test gap #17a).
+func TestPlaidCursorResumesAfterPageCap(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("t1", "One", 100, false)}},
+		{Added: []PlaidTxn{fakeTxn("t2", "Two", 200, false)}},
+		{Added: []PlaidTxn{fakeTxn("t3", "Three", 300, false)}},
+		{Added: []PlaidTxn{fakeTxn("t4", "Four", 400, false)}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if !first.HasMore || first.Count != 3 {
+		t.Fatalf("first sync: expected 3 suggestions + has_more, got %d / %v", first.Count, first.HasMore)
+	}
+	var cursor string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT sync_cursor FROM plaid_items WHERE guid = $1`, itemGUID).Scan(&cursor); err != nil {
+		t.Fatal(err)
+	}
+	if cursor != "cursor-3" {
+		t.Fatalf("expected cursor-3 persisted at the cap, got %q", cursor)
+	}
+
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.HasMore || second.Count != 4 {
+		t.Fatalf("second sync: expected 4 suggestions + no has_more, got %d / %v", second.Count, second.HasMore)
+	}
+}
+
+// TestPlaidDisconnectAbortsOnPlaidFailure: a failed /item/remove must NOT
+// delete the local row (the only copy of the access token) — finding #8.
+func TestPlaidDisconnectAbortsOnPlaidFailure(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.removeErr = errors.New("plaid is down")
+
+	w := httptest.NewRecorder()
+	h.handleExchange(w, authedRequest("POST", "/exchange", map[string]string{"public_token": "tok"}, bookGUID, userID))
+	var ex struct {
+		ItemGUID string `json:"item_guid"`
+	}
+	json.NewDecoder(w.Body).Decode(&ex)
+
+	req := httptest.NewRequest("DELETE", "/items/"+ex.ItemGUID, nil)
+	ctx := context.WithValue(req.Context(), auth.BookGUIDKey, bookGUID)
+	ctx = context.WithValue(ctx, auth.UserIDKey, userID)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("guid", ex.ItemGUID)
+	req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, rctx))
+
+	w = httptest.NewRecorder()
+	h.handleDisconnect(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("disconnect with Plaid failure: got %d, want 500", w.Code)
+	}
+	var cnt int
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, ex.ItemGUID).Scan(&cnt); err != nil {
+		t.Fatal(err)
+	}
+	if cnt != 1 {
+		t.Fatalf("plaid_items row must survive a failed disconnect, got %d rows", cnt)
+	}
+}
+
+// TestPlaidSyncDecryptFailure: corrupted ciphertext surfaces as a 500, never a
+// silent success (test gap #17c).
+func TestPlaidSyncDecryptFailure(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	if _, err := db.Pool.Exec(context.Background(),
+		`UPDATE plaid_items SET access_token_ciphertext = 'corrupted' WHERE guid = $1`, itemGUID); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.handleSync(w, authedRequest("POST", "/sync", map[string]string{"item_guid": itemGUID}, bookGUID, userID))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("decrypt failure: got %d, want 500", w.Code)
+	}
+}
+
+// TestIsPlaidDupViolation pins the exact classification used to treat a
+// concurrent-import race as a benign skip (test gap #17b).
+func TestIsPlaidDupViolation(t *testing.T) {
+	dup := &pgconn.PgError{Code: "23505", ConstraintName: "idx_transactions_plaid_txn"}
+	if !isPlaidDupViolation(fmt.Errorf("insert transaction: %w", dup)) {
+		t.Fatal("wrapped 23505 on the plaid index must classify as dup")
+	}
+	other := &pgconn.PgError{Code: "23505", ConstraintName: "some_other_unique"}
+	if isPlaidDupViolation(other) {
+		t.Fatal("23505 on another constraint must NOT classify as dup")
+	}
+	if isPlaidDupViolation(errors.New("plain")) {
+		t.Fatal("plain error must NOT classify as dup")
 	}
 }
 

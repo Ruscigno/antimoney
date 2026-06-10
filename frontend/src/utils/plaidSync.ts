@@ -1,6 +1,9 @@
 export interface PlaidAccountMeta {
     item_guid?: string;
     last_synced_at?: string;
+    // Denormalized at link time so the register can label the sync status with
+    // the bank's name (spec §6.2) without an extra fetch.
+    institution_name?: string;
 }
 
 // Timezone used to decide the "first open of the day" auto-sync boundary.

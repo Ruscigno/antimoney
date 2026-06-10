@@ -60,12 +60,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
         try {
             const payload = includedRows.map(r => ({
                 transaction_id: r.suggestion.transaction_id,
-                bank_account_guid: r.suggestion.bank_account_guid,
                 category_account_guid: r.categoryGUID,
-                description: r.suggestion.description,
-                date: r.suggestion.date,
-                amount_num: r.suggestion.amount_num,
-                amount_denom: r.suggestion.amount_denom,
             }));
             const result = await plaidImport(payload);
             if (result.failed && result.failed.length > 0) {
@@ -93,7 +88,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
             <div className="modal">
                 <div className="modal-header">
-                    <h2>{institutionName} — {t('plaid.mapAccounts')}</h2>
+                    <h2>{institutionName} — {t('plaid.importTitle')}</h2>
                     <button className="modal-close" onClick={onClose}>✕</button>
                 </div>
                 <div className="modal-body" style={{ overflowY: 'auto', maxHeight: '60vh' }}>
