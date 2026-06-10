@@ -133,9 +133,10 @@ func (c *realPlaidClient) SyncTransactions(ctx context.Context, accessToken, cur
 	for _, t := range resp.Added {
 		date, _ := time.Parse("2006-01-02", t.GetDate())
 		// Plaid returns amounts as float64; round to whole cents (denom = 100).
-		// math.Round avoids the 1-cent error that plain int64(f*100) truncation
-		// causes (e.g. 0.10*100 == 9.999...). Currency values at this scale are
-		// represented exactly in float64, so the rounding is deterministic.
+		// math.Round is essential because float64 cannot represent most cent
+		// fractions exactly (e.g. 0.10 is stored as 0.0999999...), so plain
+		// int64(f*100) would truncate to the wrong cent; the integer cent values
+		// that result after rounding ARE exactly representable.
 		amountNum := int64(math.Round(t.GetAmount() * 100))
 		added = append(added, PlaidTxn{
 			TransactionID: t.GetTransactionId(),
