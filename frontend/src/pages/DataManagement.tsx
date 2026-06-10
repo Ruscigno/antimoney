@@ -42,7 +42,8 @@ export default function DataManagement() {
         setPlaidMessage(null);
         try {
             const result = await plaidSync(item.guid);
-            const moreSuffix = result.has_more ? ` ${t('plaid.syncMore')}` : '';
+            const moreSuffix = (result.has_more ? ` ${t('plaid.syncMore')}` : '')
+                + (result.in_progress ? ` ${t('plaid.syncInProgress')}` : '');
             if (result.count > 0) {
                 // Spec §6.2: report "<N> new transactions" AND open the matcher.
                 setPlaidMessage({

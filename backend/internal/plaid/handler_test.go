@@ -917,6 +917,118 @@ func TestPlaidSyncLockSkipsFetch(t *testing.T) {
 	}
 }
 
+// TestPlaidSyncLockReleasedOnError (round-7 M1): a failed fetch must release
+// the per-item advisory lock — otherwise every later sync silently takes the
+// lock-skip path forever.
+func TestPlaidSyncLockReleasedOnError(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	fake.syncErr = errors.New("plaid exploded")
+	w := httptest.NewRecorder()
+	h.handleSync(w, authedRequest("POST", "/sync", map[string]string{"item_guid": itemGUID}, bookGUID, userID))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("failed fetch: got %d, want 500", w.Code)
+	}
+
+	// Lock must be free again: the next sync FETCHES (pageIndex advances)
+	// instead of silently serving staged-only results.
+	fake.syncErr = nil
+	pagesBefore := fake.pageIndex
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if fake.pageIndex == pagesBefore {
+		t.Fatal("lock leaked: sync after a failed fetch did not fetch again")
+	}
+	if res.InProgress {
+		t.Fatal("lock leaked: sync reports another sync in progress")
+	}
+	if res.Count != 2 {
+		t.Fatalf("expected 2 suggestions after recovery, got %d", res.Count)
+	}
+}
+
+// TestPlaidPendingPostedSignInversion (round-7 M2): a posted REVERSAL
+// (-amount) of an imported pending charge must stay visible — the sign-blind
+// comparison used to collide it with the original's bank split and discard it.
+func TestPlaidPendingPostedSignInversion(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	reversal := fakeTxn("txn-R", "Coffee (reversed)", -100, false)
+	reversal.PendingTransactionID = "txn-P"
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Coffee", 100, true)}},
+		{Removed: []string{"txn-P"}, Added: []PlaidTxn{reversal}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+	cat := expenseAccount(t, db, bookGUID, "Dining")
+
+	doSync(t, h, itemGUID, bookGUID, userID)
+	importRows(t, h, bookGUID, userID, []ImportRow{{TransactionID: "txn-P", CategoryAccountGUID: cat}})
+
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 1 || second.Suggestions[0].TransactionID != "txn-R" || second.Suggestions[0].AmountNum != -100 {
+		t.Fatalf("sign-inverted posted txn (reversal) must stay suggested, got %+v", second.Suggestions)
+	}
+}
+
+// TestPlaidDismissedSurvivesPendingToPosted (round-7 M3): "never import this
+// transaction" must survive the id change when a dismissed pending posts.
+func TestPlaidDismissedSurvivesPendingToPosted(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	posted := fakeTxn("txn-Q", "Subscription (posted)", 100, false)
+	posted.PendingTransactionID = "txn-P"
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Subscription", 100, true)}},
+		{Removed: []string{"txn-P"}, Added: []PlaidTxn{posted}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 1 {
+		t.Fatalf("expected pending suggestion, got %d", first.Count)
+	}
+	w := httptest.NewRecorder()
+	h.handleDismiss(w, authedRequest("POST", "/dismiss", map[string]interface{}{"transaction_ids": []string{"txn-P"}}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss: %d: %s", w.Code, w.Body)
+	}
+
+	second := doSync(t, h, itemGUID, bookGUID, userID) // P posts as Q
+	if second.Count != 0 {
+		t.Fatalf("dismissed pending must stay dismissed after posting under a new id, got %+v", second.Suggestions)
+	}
+}
+
+// TestPlaidDismissCrossBookIDOR: dismissing another book's staged transaction
+// must affect zero rows and leave the victim's suggestions intact.
+func TestPlaidDismissCrossBookIDOR(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+	doSync(t, h, itemGUID, bookGUID, userID)
+
+	authSvc := auth.NewUserService(db.Pool)
+	resB, err := authSvc.Register(context.Background(), auth.RegisterRequest{Email: "evil@test.com", Password: "pass", Name: "Evil"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	h.handleDismiss(w, authedRequest("POST", "/dismiss", map[string]interface{}{"transaction_ids": []string{"txn-001"}}, resB.BookGUID, resB.UserID))
+	var dis map[string]int
+	json.NewDecoder(w.Body).Decode(&dis)
+	if dis["dismissed"] != 0 {
+		t.Fatalf("cross-book dismiss must affect 0 rows, got %d", dis["dismissed"])
+	}
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if res.Count != 2 {
+		t.Fatalf("victim's suggestions must be intact, got %d", res.Count)
+	}
+}
+
 func TestPlaidSyncReauthRequired(t *testing.T) {
 	h, fake, db, bookGUID, userID := setupTestHandler(t)
 	defer db.Teardown(context.Background())

@@ -274,4 +274,15 @@ multi-currency display; encryption-key rotation.
   surface automatically once the account is mapped. A bank-side `removed` for an
   already-imported transaction is logged (book-vs-bank divergence) but never deletes the
   user's books; a posted transaction whose value diverges from its imported pending
-  predecessor stays visible so the user can act on the correction.
+  predecessor stays visible so the user can act on the correction (the value comparison
+  is sign-aware over the linked bank account's split, so a reversal never collides with
+  the original charge).
+- **Dismissal is permanent by design.** A dismissed suggestion never resurfaces — not
+  on bank-side `modified` deltas (even value changes), and not when a dismissed pending
+  posts under a new `transaction_id` (the flag is inherited via
+  `pending_transaction_id`). Rationale: "never import this transaction" is an explicit
+  user decision; silently resurrecting it on bank edits would make dismissal
+  untrustworthy. Re-importing a dismissed transaction requires disconnect+reconnect.
+- **Concurrent syncs are serialized per item** (Postgres advisory lock). The loser
+  doesn't fetch: it serves the durable staged suggestions and marks the response
+  `in_progress` so the UI can tell the user results may be incomplete.

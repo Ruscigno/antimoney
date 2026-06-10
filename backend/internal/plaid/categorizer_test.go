@@ -127,4 +127,14 @@ func TestHistoryCategorizer(t *testing.T) {
 	if batch[2] != "" || batch[3] != "" {
 		t.Fatalf("batch[2,3]: want empty suggestions, got %q / %q", batch[2], batch[3])
 	}
+
+	// The per-row fallback path (used when a batch query fails) must agree
+	// with the batch path result-for-result.
+	descs := []string{"Tim Hortons", "tim hortons #123", "Unknown XYZ", "100% JUICE"}
+	perRow := cat.suggestPerRow(ctx, res.BookGUID, descs)
+	for i := range descs {
+		if perRow[i] != batch[i] {
+			t.Fatalf("fallback parity broken at %d (%q): perRow=%q batch=%q", i, descs[i], perRow[i], batch[i])
+		}
+	}
 }

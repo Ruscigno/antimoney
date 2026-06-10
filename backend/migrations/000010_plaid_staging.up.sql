@@ -7,6 +7,10 @@
 -- are rebuilt from this table on every sync, and rows are deleted on import.
 -- It also lets Import read date/description/amount server-side instead of
 -- trusting the client, and gives `modified`/`removed` deltas a place to apply.
+--
+-- NOTE: executed statements below are frozen as first applied; amendments
+-- (CHECK constraint, OCC-compliant cleanup) live in migration 000011 so
+-- databases that already ran this version don't silently drift.
 CREATE TABLE plaid_staged_transactions (
     book_guid              UUID        NOT NULL REFERENCES books(guid) ON DELETE CASCADE,
     item_guid              UUID        NOT NULL REFERENCES plaid_items(guid) ON DELETE CASCADE,
@@ -19,8 +23,7 @@ CREATE TABLE plaid_staged_transactions (
     amount_denom           BIGINT      NOT NULL,
     pending                BOOLEAN     NOT NULL DEFAULT false,
     created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (book_guid, transaction_id),
-    CHECK (amount_denom > 0)
+    PRIMARY KEY (book_guid, transaction_id)
 );
 
 CREATE INDEX idx_plaid_staged_item ON plaid_staged_transactions(item_guid);
@@ -29,13 +32,10 @@ CREATE INDEX idx_plaid_staged_item ON plaid_staged_transactions(item_guid);
 -- could both pass the application-level check. Defensive cleanup first: keep
 -- ONE holder of each plaid account_id per book (min(ctid) picks an arbitrary
 -- survivor — ctid is a physical position, not insertion order) and strip the
--- link from the rest. No-op on healthy databases; NOT undone by the down
+-- link from the rest. No-op on healthy databases; not undone by the down
 -- migration (the stripped duplicates were invalid state with no canonical
--- "correct" restore).
-UPDATE accounts
-SET metadata   = metadata - 'plaid',
-    updated_at = NOW(),
-    version    = version + 1
+-- restore). Migration 000011 re-runs this with the OCC version bump.
+UPDATE accounts SET metadata = metadata - 'plaid'
 WHERE metadata->'plaid'->>'account_id' IS NOT NULL
   AND ctid NOT IN (
     SELECT min(ctid)

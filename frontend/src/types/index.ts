@@ -164,4 +164,7 @@ export interface SyncResult {
     suggestions: SyncSuggestion[];
     // True when the server's page cap stopped mid-stream — sync again for more.
     has_more: boolean;
+    // True when another sync holds this item's lock: suggestions are valid but
+    // possibly incomplete.
+    in_progress?: boolean;
 }

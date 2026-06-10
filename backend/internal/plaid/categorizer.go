@@ -51,7 +51,7 @@ func (c *HistoryCategorizer) Suggest(ctx context.Context, bookGUID string, txn P
 		WHERE t.book_guid = $1
 		  AND %s
 		  AND a.account_type NOT IN ('BANK', 'ASSET', 'CASH', 'ROOT')
-		ORDER BY t.post_date DESC
+		ORDER BY t.post_date DESC, t.guid DESC
 		LIMIT 1`
 
 	// Escape LIKE metacharacters for the substring pass — bank descriptions
@@ -87,7 +87,7 @@ const batchSQL = `
 	JOIN splits s ON s.tx_guid = t.guid
 	JOIN accounts a ON a.guid = s.account_guid AND a.book_guid = $1
 	WHERE a.account_type NOT IN ('BANK', 'ASSET', 'CASH', 'ROOT')
-	ORDER BY q.orig, t.post_date DESC`
+	ORDER BY q.orig, t.post_date DESC, t.guid DESC`
 
 // SuggestBatch resolves all descriptions in two queries total — an exact pass,
 // then a substring pass over whatever the first missed — preserving Suggest's

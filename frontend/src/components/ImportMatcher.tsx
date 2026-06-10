@@ -38,7 +38,7 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
             await plaidDismiss([transactionId]);
             setRows(r => r.filter(row => row.suggestion.transaction_id !== transactionId));
         } catch {
-            setError(t('plaid.importError'));
+            setError(t('plaid.dismissError'));
         } finally {
             setDismissing(null);
         }

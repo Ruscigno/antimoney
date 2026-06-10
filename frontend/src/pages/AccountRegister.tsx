@@ -177,7 +177,8 @@ export default function AccountRegister() {
         setSyncMessage(t('plaid.syncing').replace('{{institution}}', institutionName));
         try {
             const result = await plaidSync(itemGUID);
-            const moreSuffix = result.has_more ? ` ${t('plaid.syncMore')}` : '';
+            const moreSuffix = (result.has_more ? ` ${t('plaid.syncMore')}` : '')
+                + (result.in_progress ? ` ${t('plaid.syncInProgress')}` : '');
             if (result.count > 0) {
                 setSyncMessage(t('plaid.syncSuccess').replace('{{count}}', String(result.count)) + moreSuffix);
                 setImportSuggestions(result.suggestions);

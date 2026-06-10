@@ -239,6 +239,9 @@ type SyncResult struct {
 	// HasMore signals the page cap stopped mid-stream: another sync will
 	// continue from the persisted cursor.
 	HasMore bool `json:"has_more"`
+	// InProgress signals another sync holds this item's lock right now: the
+	// suggestions returned are valid but possibly incomplete.
+	InProgress bool `json:"in_progress,omitempty"`
 }
 
 // Sync fetches new transactions for an item, deduplicates, categorizes, and
@@ -283,19 +286,32 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		lockConn.Release()
 		return nil, fmt.Errorf("acquire sync lock: %w", err)
 	}
+	inProgress := false
 	if gotLock {
-		hm, fetchErr := s.fetchAndStage(ctx, bookGUID, itemGUID, accessToken, cursor)
-		if _, unlockErr := lockConn.Exec(context.WithoutCancel(ctx),
-			`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, itemGUID); unlockErr != nil {
-			log.Printf("plaid sync: release lock for %s: %v", itemGUID, unlockErr)
-		}
-		lockConn.Release()
+		// The unlock+release MUST be deferred: a panic inside fetchAndStage is
+		// recovered by chi's middleware, and an inline unlock would never run —
+		// leaking the session lock (and the pooled conn) for the life of the
+		// instance, silently sending every future sync of this item down the
+		// lock-skip path.
+		hm, fetchErr := func() (bool, error) {
+			defer func() {
+				if _, unlockErr := lockConn.Exec(context.WithoutCancel(ctx),
+					`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, itemGUID); unlockErr != nil {
+					log.Printf("plaid sync: release lock for %s: %v", itemGUID, unlockErr)
+				}
+				lockConn.Release()
+			}()
+			return s.fetchAndStage(ctx, bookGUID, itemGUID, accessToken, cursor)
+		}()
 		if fetchErr != nil {
 			return nil, fetchErr
 		}
 		hasMore = hm
 	} else {
 		lockConn.Release()
+		// Tell the caller a concurrent fetch is running: the staged suggestions
+		// below are valid but possibly incomplete.
+		inProgress = true
 	}
 
 	bankAccountByPlaidID := make(map[string]struct{ GUID, Name string })
@@ -344,14 +360,18 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		     WHERE t.book_guid = st.book_guid
 		       AND t.metadata->'plaid'->>'transaction_id' = st.transaction_id)
 		   -- pending→posted race defense: hide a posted txn whose pending
-		   -- predecessor was already imported WITH THE SAME VALUE (a diverged
-		   -- value stays visible so the user can act on the correction).
+		   -- predecessor was already imported WITH THE SAME VALUE on the linked
+		   -- bank account (sign-aware: the import writes the bank split as
+		   -- -amount, so a reversal must NOT collide with the original charge;
+		   -- a diverged value stays visible so the user can act on it).
 		   AND (st.pending_transaction_id IS NULL OR NOT EXISTS (
 		     SELECT 1 FROM transactions t2
 		     JOIN splits s2 ON s2.tx_guid = t2.guid
+		     JOIN accounts a2 ON a2.guid = s2.account_guid AND a2.book_guid = t2.book_guid
 		     WHERE t2.book_guid = st.book_guid
 		       AND t2.metadata->'plaid'->>'transaction_id' = st.pending_transaction_id
-		       AND s2.value_num = st.amount_num AND s2.value_denom = st.amount_denom))
+		       AND a2.metadata->'plaid'->>'account_id' = st.plaid_account_id
+		       AND s2.value_num = -st.amount_num AND s2.value_denom = st.amount_denom))
 		 ORDER BY st.post_date, st.transaction_id`,
 		bookGUID, itemGUID, importPending,
 	)
@@ -450,7 +470,7 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		}
 	}
 
-	return &SyncResult{Count: len(suggestions), Suggestions: suggestions, HasMore: hasMore}, nil
+	return &SyncResult{Count: len(suggestions), Suggestions: suggestions, HasMore: hasMore, InProgress: inProgress}, nil
 }
 
 // fetchAndStage pulls up to maxSyncPages of /transactions/sync, staging each
@@ -508,6 +528,70 @@ func (s *PlaidService) fetchAndStage(ctx context.Context, bookGUID, itemGUID, ac
 // transaction whose pending predecessor was already imported is skipped
 // entirely — importing it again would duplicate the money movement.
 func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string, delta SyncDelta) error {
+	// Upserts run BEFORE removals: a pending→posted delta carries the pending
+	// predecessor in Removed, and deleting it first would destroy the state the
+	// posted row must inherit from it (the dismissed flag, notably).
+	for _, txn := range append(append([]PlaidTxn{}, delta.Added...), delta.Modified...) {
+		dismissed := false
+		if txn.PendingTransactionID != "" {
+			imported, err := s.transactionExists(ctx, bookGUID, txn.PendingTransactionID)
+			if err != nil {
+				return fmt.Errorf("pending correlation for %s: %w", txn.TransactionID, err)
+			}
+			if imported {
+				match, err := s.importedValueMatches(ctx, bookGUID, txn.PendingTransactionID, txn.AccountID, txn.AmountNum, txn.AmountDenom)
+				if err != nil {
+					return fmt.Errorf("pending value check for %s: %w", txn.TransactionID, err)
+				}
+				if match {
+					// Same value: the posted txn is the one already imported as
+					// pending — drop both staged copies and skip.
+					if _, err := s.pool.Exec(ctx,
+						`DELETE FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = ANY($2)`,
+						bookGUID, []string{txn.PendingTransactionID, txn.TransactionID},
+					); err != nil {
+						return fmt.Errorf("drop replaced pending %s: %w", txn.PendingTransactionID, err)
+					}
+					continue
+				}
+				// Value diverged (tips/adjustments): keep the posted txn staged so
+				// the user sees it as a suggestion instead of the book silently
+				// keeping the stale pending amount forever.
+				log.Printf("plaid sync: posted txn %s diverges in value from imported pending %s; keeping it as a suggestion", txn.TransactionID, txn.PendingTransactionID)
+			}
+			// "Never import this transaction" must survive the id change when a
+			// dismissed pending posts under a new transaction_id.
+			if err := s.pool.QueryRow(ctx,
+				`SELECT COALESCE(bool_or(dismissed), false) FROM plaid_staged_transactions
+				 WHERE book_guid = $1 AND transaction_id = $2`,
+				bookGUID, txn.PendingTransactionID,
+			).Scan(&dismissed); err != nil {
+				return fmt.Errorf("dismissed propagation for %s: %w", txn.TransactionID, err)
+			}
+		}
+		// dismissed semantics: a row can be dismissed (incl. inherited from its
+		// pending predecessor) but never un-dismissed by a bank-side update —
+		// "never import this transaction" is permanent (spec §13).
+		if _, err := s.pool.Exec(ctx,
+			`INSERT INTO plaid_staged_transactions
+				(book_guid, item_guid, transaction_id, pending_transaction_id, plaid_account_id,
+				 post_date, description, amount_num, amount_denom, pending, dismissed)
+			 VALUES ($1, $2, $3, NULLIF($4,''), $5, $6, $7, $8, $9, $10, $11)
+			 ON CONFLICT (book_guid, transaction_id) DO UPDATE SET
+				pending_transaction_id = EXCLUDED.pending_transaction_id,
+				post_date              = EXCLUDED.post_date,
+				description            = EXCLUDED.description,
+				amount_num             = EXCLUDED.amount_num,
+				amount_denom           = EXCLUDED.amount_denom,
+				pending                = EXCLUDED.pending,
+				dismissed              = plaid_staged_transactions.dismissed OR EXCLUDED.dismissed`,
+			bookGUID, itemGUID, txn.TransactionID, txn.PendingTransactionID, txn.AccountID,
+			txn.Date, txn.Description, txn.AmountNum, txn.AmountDenom, txn.Pending, dismissed,
+		); err != nil {
+			return fmt.Errorf("stage txn %s: %w", txn.TransactionID, err)
+		}
+	}
+
 	if len(delta.Removed) > 0 {
 		// Surface (but never auto-apply) bank-side removals of transactions the
 		// user already imported: deleting financial data behind the user's back
@@ -540,52 +624,6 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 			return fmt.Errorf("remove staged: %w", err)
 		}
 	}
-	for _, txn := range append(append([]PlaidTxn{}, delta.Added...), delta.Modified...) {
-		if txn.PendingTransactionID != "" {
-			imported, err := s.transactionExists(ctx, bookGUID, txn.PendingTransactionID)
-			if err != nil {
-				return fmt.Errorf("pending correlation for %s: %w", txn.TransactionID, err)
-			}
-			if imported {
-				match, err := s.importedValueMatches(ctx, bookGUID, txn.PendingTransactionID, txn.AmountNum, txn.AmountDenom)
-				if err != nil {
-					return fmt.Errorf("pending value check for %s: %w", txn.TransactionID, err)
-				}
-				if match {
-					// Same value: the posted txn is the one already imported as
-					// pending — drop both staged copies and skip.
-					if _, err := s.pool.Exec(ctx,
-						`DELETE FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = ANY($2)`,
-						bookGUID, []string{txn.PendingTransactionID, txn.TransactionID},
-					); err != nil {
-						return fmt.Errorf("drop replaced pending %s: %w", txn.PendingTransactionID, err)
-					}
-					continue
-				}
-				// Value diverged (tips/adjustments): keep the posted txn staged so
-				// the user sees it as a suggestion instead of the book silently
-				// keeping the stale pending amount forever.
-				log.Printf("plaid sync: posted txn %s diverges in value from imported pending %s; keeping it as a suggestion", txn.TransactionID, txn.PendingTransactionID)
-			}
-		}
-		if _, err := s.pool.Exec(ctx,
-			`INSERT INTO plaid_staged_transactions
-				(book_guid, item_guid, transaction_id, pending_transaction_id, plaid_account_id,
-				 post_date, description, amount_num, amount_denom, pending)
-			 VALUES ($1, $2, $3, NULLIF($4,''), $5, $6, $7, $8, $9, $10)
-			 ON CONFLICT (book_guid, transaction_id) DO UPDATE SET
-				pending_transaction_id = EXCLUDED.pending_transaction_id,
-				post_date              = EXCLUDED.post_date,
-				description            = EXCLUDED.description,
-				amount_num             = EXCLUDED.amount_num,
-				amount_denom           = EXCLUDED.amount_denom,
-				pending                = EXCLUDED.pending`,
-			bookGUID, itemGUID, txn.TransactionID, txn.PendingTransactionID, txn.AccountID,
-			txn.Date, txn.Description, txn.AmountNum, txn.AmountDenom, txn.Pending,
-		); err != nil {
-			return fmt.Errorf("stage txn %s: %w", txn.TransactionID, err)
-		}
-	}
 	return nil
 }
 
@@ -604,19 +642,23 @@ func (s *PlaidService) transactionExists(ctx context.Context, bookGUID, plaidTxn
 }
 
 // importedValueMatches reports whether the transaction imported under
-// plaidTxnID carries a split with exactly (num, denom) — the category split is
-// written with the Plaid amount verbatim, so this detects pending→posted value
-// drift.
-func (s *PlaidService) importedValueMatches(ctx context.Context, bookGUID, plaidTxnID string, num, denom int64) (bool, error) {
+// plaidTxnID moved exactly this amount on the LINKED BANK ACCOUNT. The import
+// writes the bank split as -amount, so comparing only that split (sign-aware)
+// is what detects pending→posted drift: matching against ANY split would let a
+// reversal (-amount) collide with the bank split of the original charge and be
+// silently discarded as "same value".
+func (s *PlaidService) importedValueMatches(ctx context.Context, bookGUID, plaidTxnID, plaidAccountID string, num, denom int64) (bool, error) {
 	var match bool
 	err := s.pool.QueryRow(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM transactions t
 			JOIN splits s ON s.tx_guid = t.guid
+			JOIN accounts a ON a.guid = s.account_guid AND a.book_guid = t.book_guid
 			WHERE t.book_guid = $1
 			  AND t.metadata->'plaid'->>'transaction_id' = $2
-			  AND s.value_num = $3 AND s.value_denom = $4)`,
-		bookGUID, plaidTxnID, num, denom,
+			  AND a.metadata->'plaid'->>'account_id' = $3
+			  AND s.value_num = -($4::bigint) AND s.value_denom = $5)`,
+		bookGUID, plaidTxnID, plaidAccountID, num, denom,
 	).Scan(&match)
 	return match, err
 }
@@ -730,7 +772,7 @@ func (s *PlaidService) Import(ctx context.Context, rows []ImportRow) (*ImportRes
 				return result, fmt.Errorf("pending correlation for %s: %w", row.TransactionID, err)
 			}
 			if imported {
-				match, err := s.importedValueMatches(ctx, bookGUID, *pendingID, amountNum, amountDenom)
+				match, err := s.importedValueMatches(ctx, bookGUID, *pendingID, plaidAcctID, amountNum, amountDenom)
 				if err != nil {
 					return result, fmt.Errorf("pending value check for %s: %w", row.TransactionID, err)
 				}
