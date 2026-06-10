@@ -32,6 +32,24 @@ esac
 exit 0
 EOF
   chmod +x "$STUB_BIN/gcloud"
+
+  # terraform stub: logs its args and returns canned values for `output -raw`.
+  cat > "$STUB_BIN/terraform" <<EOF
+#!/usr/bin/env bash
+echo "terraform \$*" >> "$CALLS"
+case "\$1" in
+  output)
+    case "\$3" in
+      backend_url)          echo "https://backend.example" ;;
+      frontend_url)         echo "https://frontend.example" ;;
+      build_staging_bucket) echo "stage-bucket" ;;
+    esac
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$STUB_BIN/terraform"
+
   PATH="$STUB_BIN:$PATH"
 
   # Source the script: defines functions but does NOT run main (guarded).
@@ -160,4 +178,41 @@ ENVEOF
   [ "$status" -eq 0 ]
   [[ "$output" == *"WARNING"* ]]
   [[ "$output" == *"PERMISSION_DENIED"* ]]
+}
+
+@test "deploy_frontend swaps in the prod Dockerfile to build, then the trap restores the originals" {
+  PROJECT_ID="my-proj"; require_project
+  STAGING_BUCKET="bucket"
+  cd "$BATS_TEST_TMPDIR"
+  mkdir -p frontend
+  echo "DEV"  > frontend/Dockerfile        # dev image (default)
+  echo "PROD" > frontend/Dockerfile.prod   # prod image (built)
+
+  run deploy_frontend
+  [ "$status" -eq 0 ]
+
+  # Trap reversed the swap: originals are back and no leftover Dockerfile.dev.
+  [ "$(cat frontend/Dockerfile)" = "DEV" ]
+  [ "$(cat frontend/Dockerfile.prod)" = "PROD" ]
+  [ ! -f frontend/Dockerfile.dev ]
+
+  # The prod image was built and the service deployed.
+  grep -q 'builds submit' "$CALLS"
+  grep -q 'run deploy antimoney-frontend' "$CALLS"
+}
+
+@test "apply_infra runs terraform with the project_id var" {
+  PROJECT_ID="my-proj"; require_project
+  cd "$BATS_TEST_TMPDIR"; mkdir -p infra
+  run apply_infra
+  [ "$status" -eq 0 ]
+  grep -q 'terraform apply -var=project_id=my-proj' "$CALLS"
+}
+
+@test "read_outputs populates URLs and the staging bucket from terraform outputs" {
+  cd "$BATS_TEST_TMPDIR"; mkdir -p infra
+  read_outputs
+  [ "$BACKEND_URL" = "https://backend.example" ]
+  [ "$FRONTEND_URL" = "https://frontend.example" ]
+  [ "$STAGING_BUCKET" = "stage-bucket" ]
 }
