@@ -289,11 +289,20 @@ multi-currency display; encryption-key rotation.
   bank edits would make dismissal untrustworthy. Re-importing a dismissed transaction
   requires disconnect+reconnect.
 - **Token crypto compatibility & rotation.** Ciphertexts are sealed with AAD =
-  `(book_guid, item_id)`; tokens sealed by pre-AAD builds still decrypt via a legacy
-  nil-AAD fallback and are re-sealed with the primary key + AAD on first use — the
-  same opportunistic re-seal is what completes a key rotation without forcing users
-  to re-link. A token no key can decrypt does not brick the item: disconnect proceeds
-  with local cleanup (the Plaid-side Item must then be removed in the dashboard).
+  `(book_guid, item_id)`. Tokens sealed by pre-AAD builds decrypt **only** behind the
+  sunset flag `PLAID_LEGACY_TOKEN_FALLBACK=true` (default off — production never
+  weakens the anti-swap guarantee): enable it on an affected environment, let the
+  opportunistic re-seal migrate the tokens on first use, then disable it. The same
+  re-seal (guarded by an OCC version clause so it can never overwrite a token written
+  by a concurrent re-link) is what completes a key rotation without forcing users to
+  re-link. A token no key can decrypt does not brick the item: disconnect **archives
+  the row to `plaid_migration_audit`** and then cleans up locally — a key
+  misconfiguration stays operator-recoverable, and the Plaid-side Item must be
+  removed in the dashboard.
+- **Secret provisioning.** Terraform manages only the Secret Manager containers and
+  IAM (`enable_plaid = true`); the secret values are added out-of-band with
+  `gcloud secrets versions add`, so they never pass through Terraform variables or
+  state.
 - **`plaid_migration_audit` retention.** Rows backed up by destructive migrations are
   kept indefinitely as an audit trail (they contain only ciphertexts, never plaintext
   tokens); operators may prune manually. The table is dropped by 000008's down.

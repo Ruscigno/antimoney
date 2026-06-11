@@ -3,6 +3,9 @@ package ratelimit
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
 )
 
 // A nil limiter (Redis not configured) must fail open everywhere — a missing
@@ -39,5 +42,41 @@ func TestAllowNFailsOpenWhenRedisUnreachable(t *testing.T) {
 	}
 	if !l.AllowN(context.Background(), "plaid:lt:u1", 10) {
 		t.Fatal("AllowN must fail open when Redis is unreachable")
+	}
+}
+
+// TestAllowNWindowAccounting exercises the REAL counting behaviour against an
+// in-process Redis (miniredis): the budget is enforced, keys are isolated per
+// caller, and the bucket expires.
+func TestAllowNWindowAccounting(t *testing.T) {
+	srv := miniredis.RunT(t)
+	l, err := New("redis://" + srv.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	// Exactly perMinute calls pass; the next one in the same window is denied.
+	for i := 0; i < 5; i++ {
+		if !l.AllowN(ctx, "plaid:sync:user-a", 5) {
+			t.Fatalf("call %d within budget must be allowed", i+1)
+		}
+	}
+	if l.AllowN(ctx, "plaid:sync:user-a", 5) {
+		t.Fatal("call over budget must be denied")
+	}
+
+	// Keys are isolated: another user (and another op) is unaffected.
+	if !l.AllowN(ctx, "plaid:sync:user-b", 5) {
+		t.Fatal("a different user must have an independent budget")
+	}
+	if !l.AllowN(ctx, "plaid:lt:user-a", 5) {
+		t.Fatal("a different operation must have an independent budget")
+	}
+
+	// The bucket has a TTL — after the window passes, the budget resets.
+	srv.FastForward(3 * time.Minute)
+	if !l.AllowN(ctx, "plaid:sync:user-a", 5) {
+		t.Fatal("budget must reset after the window expires")
 	}
 }

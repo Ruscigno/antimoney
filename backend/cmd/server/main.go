@@ -79,7 +79,7 @@ func main() {
 	var plaidHandler *plaidpkg.PlaidHandler
 	if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" && cfg.PlaidTokenEncKey != "" {
 		plaidClient := plaidpkg.NewRealPlaidClient(cfg.PlaidClientID, cfg.PlaidSecret, cfg.PlaidEnv)
-		plaidSvc, plaidErr := plaidpkg.NewPlaidService(pool, plaidClient, cfg.PlaidTokenEncKey, txSvc)
+		plaidSvc, plaidErr := plaidpkg.NewPlaidService(pool, plaidClient, cfg.PlaidTokenEncKey, cfg.PlaidLegacyTokenFallback, txSvc)
 		if plaidErr != nil {
 			log.Printf("Warning: Plaid disabled (%v). Set PLAID_CLIENT_ID, PLAID_SECRET, PLAID_TOKEN_ENC_KEY to enable.", plaidErr)
 		} else {

@@ -41,13 +41,19 @@ type PlaidService struct {
 	// the next successful use (loadAndDecryptToken). A retired key can only be
 	// dropped from the list once no stored token still depends on it.
 	encKeys [][]byte
-	txSvc   *services.TransactionService
-	cat     Categorizer
+	// allowLegacyTokens enables the nil-AAD decrypt fallback for ciphertexts
+	// sealed by pre-AAD builds. OFF by default: the fallback reopens the
+	// ciphertext-swap window for legacy blobs, so it must be a deliberate,
+	// temporary choice (enable, let re-seal migrate the tokens, disable).
+	allowLegacyTokens bool
+	txSvc             *services.TransactionService
+	cat               Categorizer
 }
 
 // NewPlaidService creates a PlaidService. encKeysBase64 is one or more
 // comma-separated base64-encoded 32-byte keys (first = active encrypt key).
-func NewPlaidService(pool *pgxpool.Pool, client PlaidClient, encKeysBase64 string, txSvc *services.TransactionService) (*PlaidService, error) {
+// allowLegacyTokens temporarily accepts pre-AAD ciphertexts (sunset flag).
+func NewPlaidService(pool *pgxpool.Pool, client PlaidClient, encKeysBase64 string, allowLegacyTokens bool, txSvc *services.TransactionService) (*PlaidService, error) {
 	var keys [][]byte
 	for _, part := range strings.Split(encKeysBase64, ",") {
 		part = strings.TrimSpace(part)
@@ -64,11 +70,12 @@ func NewPlaidService(pool *pgxpool.Pool, client PlaidClient, encKeysBase64 strin
 		return nil, ErrInvalidEncKey
 	}
 	return &PlaidService{
-		pool:    pool,
-		client:  client,
-		encKeys: keys,
-		txSvc:   txSvc,
-		cat:     NewHistoryCategorizer(pool),
+		pool:              pool,
+		client:            client,
+		encKeys:           keys,
+		allowLegacyTokens: allowLegacyTokens,
+		txSvc:             txSvc,
+		cat:               NewHistoryCategorizer(pool),
 	}, nil
 }
 
@@ -82,9 +89,10 @@ func (s *PlaidService) encryptToken(bookGUID, itemID, token string) (ciphertext,
 	return encrypt(s.encKeys[0], token, tokenAAD(bookGUID, itemID))
 }
 
-// decryptToken tries every key with the canonical AAD, then every key with a
-// nil AAD (legacy compatibility: ciphertexts sealed before AAD was introduced).
-// stale=true means the caller should re-seal with the primary key + AAD.
+// decryptToken tries every key with the canonical AAD and — only when the
+// sunset flag allowLegacyTokens is on — every key with a nil AAD (ciphertexts
+// sealed before AAD was introduced). stale=true means the caller should
+// re-seal with the primary key + AAD.
 func (s *PlaidService) decryptToken(bookGUID, itemID string, ciphertext, nonce []byte) (token string, stale bool, err error) {
 	var lastErr error
 	for i, key := range s.encKeys {
@@ -94,22 +102,27 @@ func (s *PlaidService) decryptToken(bookGUID, itemID string, ciphertext, nonce [
 			lastErr = err
 		}
 	}
-	for _, key := range s.encKeys {
-		if token, err := decrypt(key, ciphertext, nonce, nil); err == nil {
-			log.Printf("plaid: token for item %s decrypted via legacy nil-AAD format; re-sealing", itemID)
-			return token, true, nil
-		} else {
-			lastErr = err
+	if s.allowLegacyTokens {
+		for _, key := range s.encKeys {
+			if token, err := decrypt(key, ciphertext, nonce, nil); err == nil {
+				log.Printf("plaid: token for item %s decrypted via legacy nil-AAD format; re-sealing (disable PLAID_LEGACY_TOKEN_FALLBACK once no legacy tokens remain)", itemID)
+				return token, true, nil
+			} else {
+				lastErr = err
+			}
 		}
 	}
 	return "", false, lastErr
 }
 
 // loadAndDecryptToken loads an item's access token, decrypting with rotation
-// and legacy fallbacks, and opportunistically re-seals stale ciphertexts
-// (retired key or legacy nil-AAD format) with the primary key — this is what
-// makes key rotation eventually complete without forcing users to re-link.
-func (s *PlaidService) loadAndDecryptToken(ctx context.Context, bookGUID, itemGUID, itemID string, ciphertext, nonce []byte) (string, error) {
+// and (optionally) legacy fallbacks, and opportunistically re-seals stale
+// ciphertexts (retired key or legacy nil-AAD format) with the primary key —
+// this is what makes key rotation eventually complete without forcing users
+// to re-link. expectedVersion guards the re-seal with OCC: if a concurrent
+// Exchange (re-link) replaced the token meanwhile, the conditional UPDATE
+// matches zero rows and the fresh token is never overwritten.
+func (s *PlaidService) loadAndDecryptToken(ctx context.Context, bookGUID, itemGUID, itemID string, ciphertext, nonce []byte, expectedVersion int) (string, error) {
 	token, stale, err := s.decryptToken(bookGUID, itemID, ciphertext, nonce)
 	if err != nil {
 		return "", err
@@ -119,8 +132,8 @@ func (s *PlaidService) loadAndDecryptToken(ctx context.Context, bookGUID, itemGU
 			if _, upErr := s.pool.Exec(ctx,
 				`UPDATE plaid_items
 				 SET access_token_ciphertext = $1, access_token_nonce = $2, updated_at = NOW(), version = version + 1
-				 WHERE guid = $3 AND book_guid = $4`,
-				ct, n, itemGUID, bookGUID,
+				 WHERE guid = $3 AND book_guid = $4 AND version = $5`,
+				ct, n, itemGUID, bookGUID, expectedVersion,
 			); upErr != nil {
 				log.Printf("plaid: re-seal token for item %s: %v", itemGUID, upErr) // best-effort
 			}
@@ -333,11 +346,12 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	var ciphertext, nonce []byte
 	var importPending bool
 	var itemID string
+	var itemVersion int
 	err := s.pool.QueryRow(ctx,
-		`SELECT item_id, COALESCE(sync_cursor,''), access_token_ciphertext, access_token_nonce, import_pending
+		`SELECT item_id, COALESCE(sync_cursor,''), access_token_ciphertext, access_token_nonce, import_pending, version
 		 FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
 		itemGUID, bookGUID,
-	).Scan(&itemID, &cursor, &ciphertext, &nonce, &importPending)
+	).Scan(&itemID, &cursor, &ciphertext, &nonce, &importPending, &itemVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrItemNotFound
 	}
@@ -345,7 +359,7 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		return nil, err
 	}
 
-	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce)
+	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce, itemVersion)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt access token: %w", err)
 	}
@@ -623,7 +637,28 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 			// A $0 transaction cannot exist in a double-entry book (zero-value
 			// splits are dropped, leaving <2 splits) — importing it would fail
 			// forever and the pending→posted value correlation can never match
-			// a split that was never written. Skip at the source.
+			// a split that was never written. Skip at the source, but:
+			// (a) drop any stale non-zero staged copy (a Modified that zeroed
+			//     the value must not leave the old suggestion importable), and
+			// (b) surface the divergence when a pending we already imported
+			//     posted/settled at $0 — the book now disagrees with the bank.
+			if _, err := s.pool.Exec(ctx,
+				`DELETE FROM plaid_staged_transactions
+				 WHERE book_guid = $1 AND transaction_id = $2 AND NOT dismissed`,
+				bookGUID, txn.TransactionID,
+			); err != nil {
+				return fmt.Errorf("drop zeroed staged txn %s: %w", txn.TransactionID, err)
+			}
+			for _, id := range []string{txn.TransactionID, txn.PendingTransactionID} {
+				if id == "" {
+					continue
+				}
+				if imported, err := s.transactionExists(ctx, bookGUID, id); err != nil {
+					return fmt.Errorf("zero-amount divergence check for %s: %w", id, err)
+				} else if imported {
+					log.Printf("plaid sync: txn %s was imported with a non-zero value but the bank now reports $0 — books may diverge from the bank", id)
+				}
+			}
 			log.Printf("plaid sync: skipping zero-amount txn %s (not representable in a double-entry book)", txn.TransactionID)
 			continue
 		}
@@ -955,10 +990,11 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 
 	var ciphertext, nonce []byte
 	var itemID string
+	var itemVersion int
 	err := s.pool.QueryRow(ctx,
-		`SELECT item_id, access_token_ciphertext, access_token_nonce FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
+		`SELECT item_id, access_token_ciphertext, access_token_nonce, version FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
 		itemGUID, bookGUID,
-	).Scan(&itemID, &ciphertext, &nonce)
+	).Scan(&itemID, &ciphertext, &nonce, &itemVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrItemNotFound
 	}
@@ -966,14 +1002,18 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 		return err
 	}
 
-	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce)
+	forced := false
+	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce, itemVersion)
 	if err != nil {
-		// An undecryptable token (every key + legacy fallback failed) is
-		// unusable for /item/remove — forever. Aborting here would brick the
-		// item: no sync, no disconnect, and the down-migration guard refuses
-		// rollback while the row exists. Proceed with LOCAL deletion and tell
-		// the operator the Item must be removed in the Plaid dashboard.
-		log.Printf("plaid disconnect: token for item %s is undecryptable (%v); deleting locally — remove the Item in the Plaid dashboard to stop billing", itemGUID, err)
+		// An undecryptable token (every configured key + enabled fallbacks
+		// failed) is unusable for /item/remove. Aborting forever would brick
+		// the item (no sync, no disconnect, down-migration guard blocks
+		// rollback) — but the cause may be a RECOVERABLE key misconfiguration,
+		// so the row is ARCHIVED to plaid_migration_audit before deletion: an
+		// operator who restores the key can restore the row from the audit
+		// trail. The Plaid-side Item must be removed in the dashboard.
+		forced = true
+		log.Printf("plaid disconnect: token for item %s is undecryptable (%v); archiving row to plaid_migration_audit and deleting locally — if this is a key misconfiguration, restore the key and recover the row from the audit table; remove the Item in the Plaid dashboard to stop billing", itemGUID, err)
 	} else if rmErr := s.client.RemoveItem(ctx, accessToken); rmErr != nil {
 		// Abort: the token is VALID, so deleting the local row would destroy
 		// the only copy while the Item stays alive (and billable) at Plaid.
@@ -987,6 +1027,19 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	if forced {
+		// Archive the full row (ciphertext included) atomically with the
+		// deletion: a key misconfiguration stays recoverable by an operator.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO plaid_migration_audit (migration, payload)
+			 SELECT 'force-disconnect', to_jsonb(p.*) FROM plaid_items p
+			 WHERE p.guid = $1 AND p.book_guid = $2`,
+			itemGUID, bookGUID,
+		); err != nil {
+			return fmt.Errorf("archive item before forced disconnect: %w", err)
+		}
+	}
 
 	_, err = tx.Exec(ctx,
 		`UPDATE accounts

@@ -40,7 +40,8 @@ func setupTestHandler(t *testing.T) (*PlaidHandler, *fakePlaidClient, *testutil.
 
 	fake := newFakeClient()
 	txSvc := services.NewTransactionService(db.Pool)
-	svc, err := NewPlaidService(db.Pool, fake, encKey, txSvc)
+	// Legacy nil-AAD fallback OFF, mirroring the production default.
+	svc, err := NewPlaidService(db.Pool, fake, encKey, false, txSvc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1068,14 +1069,80 @@ func TestPlaidDisconnectForcedWhenTokenUndecryptable(t *testing.T) {
 	if cnt != 0 {
 		t.Fatalf("row must be deleted on forced disconnect, %d remain", cnt)
 	}
+	// Round-10 #1: the row must be ARCHIVED before deletion so a key
+	// misconfiguration stays recoverable by an operator.
+	var archived int
+	db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_migration_audit
+		 WHERE migration = 'force-disconnect' AND payload->>'guid' = $1`, ex.ItemGUID).Scan(&archived)
+	if archived != 1 {
+		t.Fatalf("forced disconnect must archive the row to plaid_migration_audit, found %d", archived)
+	}
 }
 
-// TestPlaidLegacyNilAADTokenIsReSealed (round-9 #1/#7): tokens sealed before
-// AAD was introduced must still decrypt (compat fallback) and be re-sealed
-// with the primary key + AAD on first use.
+// TestPlaidLegacyTokenRejectedWithoutFlag (round-10 #2): with the sunset flag
+// OFF (the default), a nil-AAD legacy ciphertext must NOT decrypt — the
+// anti-swap guarantee holds unconditionally in production.
+func TestPlaidLegacyTokenRejectedWithoutFlag(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t) // flag off
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	key := make([]byte, 32)
+	legacyCT, legacyNonce, err := encrypt(key, "access-sandbox-test-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(context.Background(),
+		`UPDATE plaid_items SET access_token_ciphertext = $1, access_token_nonce = $2 WHERE guid = $3`,
+		legacyCT, legacyNonce, itemGUID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	h.handleSync(w, authedRequest("POST", "/sync", map[string]string{"item_guid": itemGUID}, bookGUID, userID))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("legacy token without the sunset flag must fail, got %d", w.Code)
+	}
+}
+
+// TestPlaidModifiedToZeroDropsStaleStagedRow (round-10 #5): a Modified delta
+// that zeroes a transaction must remove the stale non-zero suggestion.
+func TestPlaidModifiedToZeroDropsStaleStagedRow(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-Z", "Hold", 500, false)}},
+		{Modified: []PlaidTxn{fakeTxn("txn-Z", "Hold", 0, false)}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 1 {
+		t.Fatalf("expected the $5 suggestion, got %d", first.Count)
+	}
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 0 {
+		t.Fatalf("zeroed txn must drop the stale $5 suggestion, got %+v", second.Suggestions)
+	}
+	var staged int
+	db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = 'txn-Z'`,
+		bookGUID).Scan(&staged)
+	if staged != 0 {
+		t.Fatalf("stale staged row must be deleted, %d remain", staged)
+	}
+}
+
+// TestPlaidLegacyNilAADTokenIsReSealed (round-9 #1/#7, round-10 #2): tokens
+// sealed before AAD was introduced decrypt ONLY behind the sunset flag, and
+// are re-sealed with the primary key + AAD on first use.
 func TestPlaidLegacyNilAADTokenIsReSealed(t *testing.T) {
 	h, _, db, bookGUID, userID := setupTestHandler(t)
 	defer db.Teardown(context.Background())
+	// This scenario opts into the sunset flag (default is OFF).
+	h.svc.allowLegacyTokens = true
 	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
 
 	// Re-seal the row the legacy way: same key (all-zero test key), nil AAD.

@@ -39,28 +39,24 @@ resource "google_project_service" "apis" {
 
 # Plaid secrets live in Secret Manager, not as plaintext env vars: env vars are
 # readable by any principal with run.services.get and land verbatim in the
-# Terraform state. Created only when the feature is configured. (JWT_SECRET /
-# DATABASE_URL predate this PR and keep their existing pattern.)
+# Terraform state. Terraform manages only the secret CONTAINERS and IAM; the
+# secret VALUES are added out-of-band so they never touch variables or state:
+#
+#   printf '%s' "$PLAID_SECRET"        | gcloud secrets versions add plaid-secret        --data-file=-
+#   printf '%s' "$PLAID_TOKEN_ENC_KEY" | gcloud secrets versions add plaid-token-enc-key --data-file=-
+#
+# (JWT_SECRET / DATABASE_URL predate this PR and keep their existing pattern.)
 locals {
-  plaid_secrets = var.plaid_secret == "" ? {} : {
-    "plaid-secret"        = var.plaid_secret
-    "plaid-token-enc-key" = var.plaid_token_enc_key
-  }
+  plaid_secret_ids = var.enable_plaid ? toset(["plaid-secret", "plaid-token-enc-key"]) : toset([])
 }
 
 resource "google_secret_manager_secret" "plaid" {
-  for_each  = local.plaid_secrets
+  for_each  = local.plaid_secret_ids
   secret_id = each.key
   replication {
     auto {}
   }
   depends_on = [google_project_service.apis]
-}
-
-resource "google_secret_manager_secret_version" "plaid" {
-  for_each    = local.plaid_secrets
-  secret      = google_secret_manager_secret.plaid[each.key].id
-  secret_data = each.value
 }
 
 data "google_project" "current" {}
@@ -258,7 +254,9 @@ resource "google_cloud_run_v2_service" "backend" {
     ]
   }
 
-  depends_on = [google_project_service.apis]
+  # The IAM grant (and the secrets it references) must exist before a revision
+  # that mounts them rolls out, or the deploy fails validation.
+  depends_on = [google_project_service.apis, google_secret_manager_secret_iam_member.plaid_accessor]
 }
 
 resource "google_cloud_run_service_iam_member" "backend_public" {

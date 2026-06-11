@@ -40,17 +40,18 @@ variable "cors_allowed_origins" {
 }
 
 # Plaid bank sync (optional — the backend disables the feature when unset).
-# Set real values in terraform.tfvars (not committed with secrets in git history).
-variable "plaid_client_id" {
-  description = "Plaid client id (Trial/Production)"
-  type        = string
-  default     = ""
+# enable_plaid creates the Secret Manager containers and wires the Cloud Run
+# env; the secret VALUES are added out-of-band with `gcloud secrets versions
+# add` (see infra/main.tf) so they never pass through variables or state.
+variable "enable_plaid" {
+  description = "Provision Plaid Secret Manager containers and wire the backend env"
+  type        = bool
+  default     = false
 }
 
-variable "plaid_secret" {
-  description = "Plaid API secret"
+variable "plaid_client_id" {
+  description = "Plaid client id (an identifier, not a secret)"
   type        = string
-  sensitive   = true
   default     = ""
 }
 
@@ -58,11 +59,4 @@ variable "plaid_env" {
   description = "Plaid environment: sandbox or production"
   type        = string
   default     = "production"
-}
-
-variable "plaid_token_enc_key" {
-  description = "Comma-separated base64 32-byte keys for access-token encryption at rest (first key encrypts; all keys decrypt — rotation path)"
-  type        = string
-  sensitive   = true
-  default     = ""
 }
