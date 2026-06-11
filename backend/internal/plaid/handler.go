@@ -5,10 +5,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/user/antimoney/internal/auth"
 	"github.com/user/antimoney/internal/handlers"
+	"github.com/user/antimoney/internal/ratelimit"
 )
 
 // isUUID rejects malformed ids at the boundary — a non-UUID would otherwise
@@ -20,11 +23,24 @@ func isUUID(s string) bool {
 
 // PlaidHandler is the thin HTTP layer over PlaidService.
 type PlaidHandler struct {
-	svc *PlaidService
+	svc     *PlaidService
+	limiter *ratelimit.Limiter // nil-safe: rate checks fail open without Redis
 }
 
-func NewPlaidHandler(svc *PlaidService) *PlaidHandler {
-	return &PlaidHandler{svc: svc}
+func NewPlaidHandler(svc *PlaidService, limiter *ratelimit.Limiter) *PlaidHandler {
+	return &PlaidHandler{svc: svc, limiter: limiter}
+}
+
+// Per-user per-minute caps: Plaid calls are metered, so authenticated cost
+// amplification needs a ceiling. Generous for humans, tight for loops.
+const (
+	linkTokenPerMinute = 10
+	syncPerMinute      = 30
+	maxLinkMappings    = 100
+)
+
+func (h *PlaidHandler) allow(r *http.Request, op string, perMinute int) bool {
+	return h.limiter.AllowN(r.Context(), "plaid:"+op+":"+auth.UserIDFromCtx(r.Context()), perMinute)
 }
 
 func (h *PlaidHandler) Routes() chi.Router {
@@ -41,7 +57,21 @@ func (h *PlaidHandler) Routes() chi.Router {
 }
 
 func (h *PlaidHandler) handleLinkToken(w http.ResponseWriter, r *http.Request) {
-	token, err := h.svc.CreateLinkToken(r.Context())
+	if !h.allow(r, "lt", linkTokenPerMinute) {
+		handlers.WriteErrorPublic(w, http.StatusTooManyRequests, "rate limit exceeded")
+		return
+	}
+	// Optional body: {"language": "<app locale>"} — whitelisted to the Plaid
+	// Link languages the app's locales map to; anything else falls back to en.
+	var req struct {
+		Language string `json:"language"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	language := "en"
+	if strings.HasPrefix(strings.ToLower(req.Language), "pt") {
+		language = "pt"
+	}
+	token, err := h.svc.CreateLinkToken(r.Context(), language)
 	if err != nil {
 		log.Printf("plaid link-token: %v", err)
 		handlers.WriteErrorPublic(w, http.StatusInternalServerError, "could not create link token")
@@ -81,6 +111,10 @@ func (h *PlaidHandler) handleLink(w http.ResponseWriter, r *http.Request) {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "item_guid is required")
 		return
 	}
+	if len(req.Mappings) > maxLinkMappings {
+		handlers.WriteErrorPublic(w, http.StatusBadRequest, "too many mappings (max 100)")
+		return
+	}
 	if err := h.svc.LinkAccounts(r.Context(), req.ItemGUID, req.Mappings, req.ImportPending); err != nil {
 		if errors.Is(err, ErrDuplicateLink) {
 			handlers.WriteErrorPublic(w, http.StatusConflict, "account already linked")
@@ -111,6 +145,10 @@ func (h *PlaidHandler) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !isUUID(req.ItemGUID) {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "item_guid is required")
+		return
+	}
+	if !h.allow(r, "sync", syncPerMinute) {
+		handlers.WriteErrorPublic(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
 	result, err := h.svc.Sync(r.Context(), req.ItemGUID)
@@ -156,10 +194,10 @@ func (h *PlaidHandler) handleImport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("plaid import: %v", err)
 		if result != nil && (result.Imported > 0 || len(result.Failed) > 0) {
-			// Mid-batch failure: report the partial progress honestly instead
-			// of a blanket 500 — already-imported rows are NOT a total failure,
-			// and a retry is safe (server-side dedupe).
-			handlers.WriteJSONPublic(w, http.StatusOK, map[string]interface{}{
+			// Mid-batch failure: 207 Multi-Status carries the partial progress —
+			// neither a lying 200 nor a blanket 500 (already-imported rows are
+			// not a total failure, and a retry is safe via server-side dedupe).
+			handlers.WriteJSONPublic(w, http.StatusMultiStatus, map[string]interface{}{
 				"imported": result.Imported,
 				"failed":   result.Failed,
 				"error":    "import interrupted — retry for the remaining rows",

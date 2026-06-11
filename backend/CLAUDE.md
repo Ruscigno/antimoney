@@ -19,6 +19,12 @@ DATABASE_URL="postgres://antimoney:antimoney_dev@localhost:5432/antimoney?sslmod
 - `internal/models/` — domain structs (`Account`, `Transaction`, `Split`, `User`)
 - `pages/` — routed page components (Dashboard, Accounts, AccountRegister, Transactions, DataManagement [JSON/CSV/GnuCash import], LoginPage)
 - `internal/gnc/` — rational number engine
+- `internal/plaid/` — Plaid bank sync. **Deliberate vertical-slice exception** to the
+  handlers/services split: the API client, service, thin handler, crypto, and fake
+  client cohabit one package because they share unexported types (`PlaidTxn`,
+  `SyncDelta`, sentinel errors) and the white-box test suite stubs the client without
+  exporting it. The layering itself is unchanged (thin handler → service → pgx).
+  External-integration packages may follow this layout.
 - `internal/auth/` — JWT middleware; injects `BookGUID` and `UserID` into context
 - `internal/seed/` — seeds currencies and a default chart-of-accounts on startup
 - `migrations/` — numbered SQL migrations run automatically via golang-migrate on startup

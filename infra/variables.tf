@@ -38,3 +38,31 @@ variable "cors_allowed_origins" {
   type        = string
   default     = "https://superestruturas.com"
 }
+
+# Plaid bank sync (optional — the backend disables the feature when unset).
+# Set real values in terraform.tfvars (not committed with secrets in git history).
+variable "plaid_client_id" {
+  description = "Plaid client id (Trial/Production)"
+  type        = string
+  default     = ""
+}
+
+variable "plaid_secret" {
+  description = "Plaid API secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "plaid_env" {
+  description = "Plaid environment: sandbox or production"
+  type        = string
+  default     = "production"
+}
+
+variable "plaid_token_enc_key" {
+  description = "Comma-separated base64 32-byte keys for access-token encryption at rest (first key encrypts; all keys decrypt — rotation path)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

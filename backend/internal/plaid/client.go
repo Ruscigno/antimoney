@@ -51,7 +51,8 @@ type PlaidAccount struct {
 
 // PlaidClient is the interface over the Plaid REST API.
 type PlaidClient interface {
-	CreateLinkToken(ctx context.Context, userID string) (linkToken string, err error)
+	// language is a Plaid Link language code (whitelisted by the handler).
+	CreateLinkToken(ctx context.Context, userID, language string) (linkToken string, err error)
 	ExchangePublicToken(ctx context.Context, publicToken string) (accessToken, itemID, institutionName string, err error)
 	GetAccounts(ctx context.Context, accessToken string) ([]PlaidAccount, error)
 	SyncTransactions(ctx context.Context, accessToken, cursor string) (delta SyncDelta, nextCursor string, hasMore bool, err error)
@@ -76,11 +77,14 @@ func NewRealPlaidClient(clientID, secret, env string) PlaidClient {
 	return &realPlaidClient{api: plaidapi.NewAPIClient(cfg)}
 }
 
-func (c *realPlaidClient) CreateLinkToken(ctx context.Context, userID string) (string, error) {
+func (c *realPlaidClient) CreateLinkToken(ctx context.Context, userID, language string) (string, error) {
+	if language == "" {
+		language = "en"
+	}
 	user := plaidapi.NewLinkTokenCreateRequestUser(userID)
 	req := plaidapi.NewLinkTokenCreateRequest(
 		"Antimoney",
-		"en",
+		language,
 		[]plaidapi.CountryCode{plaidapi.COUNTRYCODE_CA},
 		*user,
 	)

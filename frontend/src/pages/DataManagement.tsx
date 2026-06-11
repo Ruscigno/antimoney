@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { usePlaidLink } from 'react-plaid-link';
-import { t } from '../i18n';
+import { t, getLocale } from '../i18n';
 import { getAccounts, plaidGetLinkToken, plaidExchange, plaidLink, plaidListItems, plaidDisconnect, plaidSync } from '../api/client';
 import type { Account, PlaidBankAccount, PlaidItem, SyncSuggestion } from '../types';
 import ImportMatcher from '../components/ImportMatcher';
@@ -74,11 +74,8 @@ export default function DataManagement() {
             await plaidDisconnect(item.guid);
             setPlaidMessage({ type: 'success', text: t('plaid.disconnected') });
             loadPlaidItems();
-        } catch (e) {
-            setPlaidMessage({
-                type: 'error',
-                text: e instanceof Error ? e.message : t('plaid.syncError').replace('{{institution}}', item.institution_name),
-            });
+        } catch {
+            setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
         }
     };
 
@@ -270,11 +267,12 @@ export default function DataManagement() {
         setPlaidConnecting(true);
         setPlaidMessage(null);
         try {
-            const { link_token } = await plaidGetLinkToken();
+            const { link_token } = await plaidGetLinkToken(getLocale());
             setLinkToken(link_token);
             setPlaidStep('linking');
-        } catch (e: any) {
-            setPlaidMessage({ type: 'error', text: e.message });
+        } catch {
+            // Backend errors are not localized — never render them raw.
+            setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
         } finally {
             setPlaidConnecting(false);
         }
@@ -291,8 +289,8 @@ export default function DataManagement() {
                 setPlaidBankAccounts(result.accounts);
                 setPlaidMappings({});
                 setPlaidStep('mapping');
-            } catch (e: any) {
-                setPlaidMessage({ type: 'error', text: e.message });
+            } catch {
+                setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
                 setPlaidStep('idle');
             } finally {
                 setPlaidConnecting(false);
@@ -321,8 +319,8 @@ export default function DataManagement() {
             setPlaidStep('done');
             setPlaidMessage({ type: 'success', text: `${t('plaid.connected')}: ${plaidItem.institution}` });
             loadPlaidItems();
-        } catch (e: any) {
-            setPlaidMessage({ type: 'error', text: e.message });
+        } catch {
+            setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
         } finally {
             setPlaidConnecting(false);
         }

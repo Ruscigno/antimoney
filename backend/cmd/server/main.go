@@ -83,7 +83,7 @@ func main() {
 		if plaidErr != nil {
 			log.Printf("Warning: Plaid disabled (%v). Set PLAID_CLIENT_ID, PLAID_SECRET, PLAID_TOKEN_ENC_KEY to enable.", plaidErr)
 		} else {
-			plaidHandler = plaidpkg.NewPlaidHandler(plaidSvc)
+			plaidHandler = plaidpkg.NewPlaidHandler(plaidSvc, limiter)
 			log.Println("Plaid bank sync enabled.")
 		}
 	} else {
@@ -234,11 +234,11 @@ func main() {
 		r.Mount("/transactions", txHandler.Routes())
 		r.Mount("/accounts", acctHandler.Routes())
 		r.Route("/data", func(r chi.Router) {
-				r.Mount("/", importExportHandler.Routes())
-				if plaidHandler != nil {
-					r.Mount("/plaid", plaidHandler.Routes())
-				}
-			})
+			r.Mount("/", importExportHandler.Routes())
+			if plaidHandler != nil {
+				r.Mount("/plaid", plaidHandler.Routes())
+			}
+		})
 		r.Mount("/snapshots", snapshotHandler.Routes())
 
 		// Books endpoint (user's book)

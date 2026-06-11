@@ -226,7 +226,7 @@ export default function AccountRegister() {
     useEffect(() => {
         const plaidMeta = (account?.metadata as any)?.plaid as PlaidAccountMeta | undefined;
         if (plaidMeta?.item_guid && shouldAutoSyncToday(plaidMeta)) {
-            triggerSync(plaidMeta.item_guid, plaidMeta.institution_name ?? account?.name ?? 'Bank');
+            triggerSync(plaidMeta.item_guid, plaidMeta.institution_name ?? account?.name ?? t('plaid.bank'));
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [account?.guid]);

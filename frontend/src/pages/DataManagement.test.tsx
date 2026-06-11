@@ -35,7 +35,7 @@ vi.mock('react-plaid-link', () => ({
     },
 }));
 
-vi.mock('../i18n', () => ({ t: (k: string) => k }));
+vi.mock('../i18n', () => ({ t: (k: string) => k, getLocale: () => 'en' }));
 
 const acct = (over: Partial<Account>): Account => ({
     guid: 'x', name: 'x', account_type: 'ASSET', parent_guid: null,

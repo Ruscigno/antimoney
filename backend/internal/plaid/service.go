@@ -9,6 +9,8 @@ import (
 	"log"
 	"time"
 
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,7 +24,7 @@ var (
 	ErrDuplicateLink        = errors.New("this bank account is already linked to another Antimoney account")
 	ErrAccountNotFound      = errors.New("account not found or access denied")
 	ErrAccountAlreadyLinked = errors.New("this Antimoney account is already linked to a bank account")
-	ErrInvalidEncKey        = errors.New("PLAID_TOKEN_ENC_KEY must be a base64-encoded 32-byte key")
+	ErrInvalidEncKey        = errors.New("PLAID_TOKEN_ENC_KEY must be one or more comma-separated base64-encoded 32-byte keys")
 )
 
 // maxSyncPages caps the number of /transactions/sync pages per API call to
@@ -33,33 +35,72 @@ const maxSyncPages = 3
 type PlaidService struct {
 	pool   *pgxpool.Pool
 	client PlaidClient
-	encKey []byte
-	txSvc  *services.TransactionService
-	cat    Categorizer
+	// encKeys holds the token-encryption keys: encKeys[0] encrypts; ALL keys
+	// are tried on decrypt. This is the rotation path — prepend a new key to
+	// PLAID_TOKEN_ENC_KEY and old tokens keep decrypting until re-encrypted by
+	// the next Exchange.
+	encKeys [][]byte
+	txSvc   *services.TransactionService
+	cat     Categorizer
 }
 
-// NewPlaidService creates a PlaidService. encKeyBase64 is a base64-encoded 32-byte key.
-func NewPlaidService(pool *pgxpool.Pool, client PlaidClient, encKeyBase64 string, txSvc *services.TransactionService) (*PlaidService, error) {
-	key, err := base64.StdEncoding.DecodeString(encKeyBase64)
-	if err != nil || len(key) != 32 {
+// NewPlaidService creates a PlaidService. encKeysBase64 is one or more
+// comma-separated base64-encoded 32-byte keys (first = active encrypt key).
+func NewPlaidService(pool *pgxpool.Pool, client PlaidClient, encKeysBase64 string, txSvc *services.TransactionService) (*PlaidService, error) {
+	var keys [][]byte
+	for _, part := range strings.Split(encKeysBase64, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key, err := base64.StdEncoding.DecodeString(part)
+		if err != nil || len(key) != 32 {
+			return nil, ErrInvalidEncKey
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
 		return nil, ErrInvalidEncKey
 	}
 	return &PlaidService{
-		pool:   pool,
-		client: client,
-		encKey: key,
-		txSvc:  txSvc,
-		cat:    NewHistoryCategorizer(pool),
+		pool:    pool,
+		client:  client,
+		encKeys: keys,
+		txSvc:   txSvc,
+		cat:     NewHistoryCategorizer(pool),
 	}, nil
 }
 
-// CreateLinkToken creates a Plaid Link token for the requesting user.
-func (s *PlaidService) CreateLinkToken(ctx context.Context) (string, error) {
+// tokenAAD binds a token ciphertext to its owning book and Plaid item: a row
+// copied to another book/item fails GCM authentication on decrypt.
+func tokenAAD(bookGUID, itemID string) []byte {
+	return []byte(bookGUID + "|" + itemID)
+}
+
+func (s *PlaidService) encryptToken(bookGUID, itemID, token string) (ciphertext, nonce []byte, err error) {
+	return encrypt(s.encKeys[0], token, tokenAAD(bookGUID, itemID))
+}
+
+func (s *PlaidService) decryptToken(bookGUID, itemID string, ciphertext, nonce []byte) (string, error) {
+	var lastErr error
+	for _, key := range s.encKeys {
+		token, err := decrypt(key, ciphertext, nonce, tokenAAD(bookGUID, itemID))
+		if err == nil {
+			return token, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
+}
+
+// CreateLinkToken creates a Plaid Link token for the requesting user, with the
+// Link UI in the given (already-whitelisted) language.
+func (s *PlaidService) CreateLinkToken(ctx context.Context, language string) (string, error) {
 	userID := auth.UserIDFromCtx(ctx)
 	if userID == "" {
 		return "", errors.New("missing user id in context")
 	}
-	return s.client.CreateLinkToken(ctx, userID)
+	return s.client.CreateLinkToken(ctx, userID, language)
 }
 
 // ExchangeResult is the response from Exchange.
@@ -80,7 +121,7 @@ func (s *PlaidService) Exchange(ctx context.Context, publicToken string) (*Excha
 		return nil, fmt.Errorf("exchange failed")
 	}
 
-	ciphertext, nonce, err := encrypt(s.encKey, accessToken)
+	ciphertext, nonce, err := s.encryptToken(bookGUID, itemID, accessToken)
 	if err != nil {
 		return nil, fmt.Errorf("encrypt access token: %w", err)
 	}
@@ -130,9 +171,12 @@ type AccountMapping struct {
 func (s *PlaidService) LinkAccounts(ctx context.Context, itemGUID string, mappings []AccountMapping, importPending bool) error {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 
-	var storedBookGUID, institutionName string
-	err := s.pool.QueryRow(ctx, `SELECT book_guid, institution_name FROM plaid_items WHERE guid = $1`, itemGUID).Scan(&storedBookGUID, &institutionName)
-	if err != nil || storedBookGUID != bookGUID {
+	var institutionName string
+	err := s.pool.QueryRow(ctx,
+		`SELECT institution_name FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
+		itemGUID, bookGUID,
+	).Scan(&institutionName)
+	if err != nil {
 		return ErrItemNotFound
 	}
 
@@ -252,11 +296,12 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 	var cursor string
 	var ciphertext, nonce []byte
 	var importPending bool
+	var itemID string
 	err := s.pool.QueryRow(ctx,
-		`SELECT COALESCE(sync_cursor,''), access_token_ciphertext, access_token_nonce, import_pending
+		`SELECT item_id, COALESCE(sync_cursor,''), access_token_ciphertext, access_token_nonce, import_pending
 		 FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
 		itemGUID, bookGUID,
-	).Scan(&cursor, &ciphertext, &nonce, &importPending)
+	).Scan(&itemID, &cursor, &ciphertext, &nonce, &importPending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrItemNotFound
 	}
@@ -264,7 +309,7 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		return nil, err
 	}
 
-	accessToken, err := decrypt(s.encKey, ciphertext, nonce)
+	accessToken, err := s.decryptToken(bookGUID, itemID, ciphertext, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt access token: %w", err)
 	}
@@ -508,7 +553,10 @@ func (s *PlaidService) fetchAndStage(ctx context.Context, bookGUID, itemGUID, ac
 		 WHERE guid = $3 AND book_guid = $4`,
 		cursor, now, itemGUID, bookGUID,
 	); err != nil {
-		log.Printf("plaid sync: persist cursor: %v", err)
+		// Surface it: a persistent failure here would otherwise return 200
+		// forever while silently re-fetching the same pages on every sync.
+		// Retrying is safe — staging is durable and the upserts are idempotent.
+		return false, fmt.Errorf("persist sync cursor: %w", err)
 	}
 	if _, err := s.pool.Exec(ctx,
 		`UPDATE accounts
@@ -853,10 +901,11 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 	bookGUID := auth.BookGUIDFromCtx(ctx)
 
 	var ciphertext, nonce []byte
+	var itemID string
 	err := s.pool.QueryRow(ctx,
-		`SELECT access_token_ciphertext, access_token_nonce FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
+		`SELECT item_id, access_token_ciphertext, access_token_nonce FROM plaid_items WHERE guid = $1 AND book_guid = $2`,
 		itemGUID, bookGUID,
-	).Scan(&ciphertext, &nonce)
+	).Scan(&itemID, &ciphertext, &nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrItemNotFound
 	}
@@ -864,7 +913,7 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 		return err
 	}
 
-	accessToken, err := decrypt(s.encKey, ciphertext, nonce)
+	accessToken, err := s.decryptToken(bookGUID, itemID, ciphertext, nonce)
 	if err != nil {
 		return fmt.Errorf("decrypt access token: %w", err)
 	}

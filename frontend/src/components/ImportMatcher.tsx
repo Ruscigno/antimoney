@@ -101,8 +101,10 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
         }
     };
 
+    // Signed on purpose: a $54.99 charge and a $54.99 refund must be
+    // distinguishable while categorizing (positive = money out, per Plaid).
     const formatAmount = (num: number, denom: number) =>
-        (Math.abs(num) / denom).toFixed(2);
+        (num / denom).toFixed(2);
 
     return (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -143,9 +145,11 @@ export default function ImportMatcher({ institutionName, suggestions, onClose, o
                                             disabled={!row.included}
                                         >
                                             <option value="">{t('plaid.categoryRequired')}</option>
-                                            {accounts.map(a => (
-                                                <option key={a.guid} value={a.guid}>{a.name}</option>
-                                            ))}
+                                            {accounts
+                                                .filter(a => a.guid !== row.suggestion.bank_account_guid)
+                                                .map(a => (
+                                                    <option key={a.guid} value={a.guid}>{a.name}</option>
+                                                ))}
                                         </select>
                                     </td>
                                     <td style={{ padding: '4px 8px', textAlign: 'center' }}>

@@ -146,9 +146,11 @@ immediately before a Plaid call. The plaintext token is never persisted and neve
   `last_synced_at` is before *today* (America/Toronto), the frontend triggers a sync.
 - **Manual:** a **"Sync now"** button on the register and on DataManagement.
 - **Feedback:** while syncing, show a status indicator ("Syncing <institution>…"); on
-  success show "<N> new transactions" and open the matcher when `N > 0`; on failure show
-  a generic message ("Couldn't sync <institution> — please try again."). The backend
-  returns structured status and never leaks raw Plaid/internal errors.
+  success show "<N> transaction(s) ready to import" (the durable staged count, which
+  includes still-unimported suggestions from earlier syncs) and open the matcher when
+  `N > 0`; on failure show a generic message ("Couldn't sync <institution> — please try
+  again."). The backend returns structured status and never leaks raw Plaid/internal
+  errors.
 
 ### 6.3 Fetch → match → import
 

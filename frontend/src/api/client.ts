@@ -138,8 +138,12 @@ export const deleteSnapshot = (id: string) =>
     fetchJSON<void>(`/snapshots/${id}`, { method: 'DELETE' });
 
 // Plaid
-export const plaidGetLinkToken = () =>
-    fetchJSON<{ link_token: string }>('/data/plaid/link-token', { method: 'POST' });
+// language: the app locale — the backend whitelists it to a Plaid Link language.
+export const plaidGetLinkToken = (language: string) =>
+    fetchJSON<{ link_token: string }>('/data/plaid/link-token', {
+        method: 'POST',
+        body: JSON.stringify({ language }),
+    });
 
 export const plaidExchange = (publicToken: string) =>
     fetchJSON<{ item_guid: string; institution_name: string; accounts: PlaidBankAccount[] }>(

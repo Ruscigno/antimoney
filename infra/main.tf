@@ -183,6 +183,22 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "CORS_ALLOWED_ORIGINS"
         value = var.cors_allowed_origins
       }
+      env {
+        name  = "PLAID_CLIENT_ID"
+        value = var.plaid_client_id
+      }
+      env {
+        name  = "PLAID_SECRET"
+        value = var.plaid_secret
+      }
+      env {
+        name  = "PLAID_ENV"
+        value = var.plaid_env
+      }
+      env {
+        name  = "PLAID_TOKEN_ENC_KEY"
+        value = var.plaid_token_enc_key
+      }
     }
 
     # Connect Cloud Run to the default VPC so it can reach the DB VM's internal IP

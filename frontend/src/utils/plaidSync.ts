@@ -6,11 +6,12 @@ export interface PlaidAccountMeta {
     institution_name?: string;
 }
 
-// Timezone used to decide the "first open of the day" auto-sync boundary.
-// KNOWN LIMITATION: hardcoded to the target bank's locale (RBC = Canada).
-// For users in other timezones the day-rollover can be off by a few hours.
-// TODO: make this configurable per book/user.
-export const AUTO_SYNC_TIMEZONE = 'America/Toronto';
+// Timezone used to decide the "first open of the day" auto-sync boundary:
+// the BROWSER's timezone — "a new day for the user" is what matters for an
+// open-the-app trigger. Falls back to the MVP bank's locale if the browser
+// doesn't expose one. Per-book configuration is tracked in issue #4.
+export const AUTO_SYNC_TIMEZONE =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Toronto';
 
 // shouldAutoSyncToday reports whether a Plaid-linked account should auto-sync on
 // open: it must have a linked item and not have synced yet *today* (evaluated in

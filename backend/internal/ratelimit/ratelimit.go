@@ -103,3 +103,24 @@ func (l *Limiter) IsTokenRevoked(ctx context.Context, jti string) bool {
 	}
 	return exists > 0
 }
+
+// AllowN checks a generic per-minute cap for an arbitrary key (e.g. a user id
+// scoped by endpoint name). Same semantics as the other checks: a 1-minute
+// UTC bucket, failing open on Redis errors and on a nil limiter.
+func (l *Limiter) AllowN(ctx context.Context, key string, perMinute int) bool {
+	if l == nil {
+		return true
+	}
+	k := fmt.Sprintf("rl:%s:%s", key, time.Now().UTC().Format("2006-01-02T15:04"))
+	count, err := l.rdb.Incr(ctx, k).Result()
+	if err != nil {
+		log.Printf("ratelimit: redis error on %s: %v", key, err)
+		return true // fail open
+	}
+	if count == 1 {
+		if err := l.rdb.Expire(ctx, k, 2*time.Minute).Err(); err != nil {
+			log.Printf("ratelimit: redis expire error: %v", err)
+		}
+	}
+	return count <= int64(perMinute)
+}

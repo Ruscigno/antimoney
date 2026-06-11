@@ -56,7 +56,7 @@ func newFakeClient() *fakePlaidClient {
 	}
 }
 
-func (f *fakePlaidClient) CreateLinkToken(_ context.Context, _ string) (string, error) {
+func (f *fakePlaidClient) CreateLinkToken(_ context.Context, _, _ string) (string, error) {
 	return f.linkToken, nil
 }
 

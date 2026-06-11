@@ -44,7 +44,7 @@ func setupTestHandler(t *testing.T) (*PlaidHandler, *fakePlaidClient, *testutil.
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewPlaidHandler(svc), fake, db, res.BookGUID, res.UserID
+	return NewPlaidHandler(svc, nil), fake, db, res.BookGUID, res.UserID
 }
 
 func authedRequest(method, path string, body interface{}, bookGUID, userID string) *http.Request {

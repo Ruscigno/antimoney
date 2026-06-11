@@ -8,7 +8,11 @@ import (
 	"io"
 )
 
-func encrypt(key []byte, plaintext string) (ciphertext, nonce []byte, err error) {
+// encrypt seals plaintext bound to aad (additional authenticated data). The
+// ciphertext only decrypts with the same aad, so a row swapped to another
+// book/item by an attacker with DB access fails authentication instead of
+// decrypting successfully.
+func encrypt(key []byte, plaintext string, aad []byte) (ciphertext, nonce []byte, err error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, nil, err
@@ -21,11 +25,11 @@ func encrypt(key []byte, plaintext string) (ciphertext, nonce []byte, err error)
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, err
 	}
-	ciphertext = gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	ciphertext = gcm.Seal(nil, nonce, []byte(plaintext), aad)
 	return ciphertext, nonce, nil
 }
 
-func decrypt(key []byte, ciphertext, nonce []byte) (string, error) {
+func decrypt(key []byte, ciphertext, nonce, aad []byte) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
@@ -34,7 +38,7 @@ func decrypt(key []byte, ciphertext, nonce []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	plain, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plain, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
 		return "", errors.New("decrypt failed")
 	}
