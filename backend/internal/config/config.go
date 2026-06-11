@@ -3,16 +3,16 @@ package config
 import "os"
 
 type Config struct {
-	DatabaseURL         string
-	RedisURL            string
-	Port                string
-	Environment         string
-	JWTSecret           string
-	CORSAllowedOrigins  string
-	PlaidClientID       string
-	PlaidSecret         string
-	PlaidEnv            string
-	PlaidTokenEncKey    string
+	DatabaseURL        string
+	RedisURL           string
+	Port               string
+	Environment        string
+	JWTSecret          string
+	CORSAllowedOrigins string
+	PlaidClientID      string
+	PlaidSecret        string
+	PlaidEnv           string
+	PlaidTokenEncKey   string
 }
 
 func Load() *Config {

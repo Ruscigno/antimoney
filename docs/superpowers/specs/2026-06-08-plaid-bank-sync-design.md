@@ -282,9 +282,24 @@ multi-currency display; encryption-key rotation.
 - **Dismissal is permanent by design.** A dismissed suggestion never resurfaces — not
   on bank-side `modified` deltas (even value changes), and not when a dismissed pending
   posts under a new `transaction_id` (the flag is inherited via
-  `pending_transaction_id`). Rationale: "never import this transaction" is an explicit
-  user decision; silently resurrecting it on bank edits would make dismissal
-  untrustworthy. Re-importing a dismissed transaction requires disconnect+reconnect.
+  `pending_transaction_id`; dismissed rows survive bank-side `removed` deltas as
+  invisible tombstones precisely so the inheritance works even when the removal and
+  the posted successor arrive in different sync pages or calls). Rationale: "never
+  import this transaction" is an explicit user decision; silently resurrecting it on
+  bank edits would make dismissal untrustworthy. Re-importing a dismissed transaction
+  requires disconnect+reconnect.
+- **Token crypto compatibility & rotation.** Ciphertexts are sealed with AAD =
+  `(book_guid, item_id)`; tokens sealed by pre-AAD builds still decrypt via a legacy
+  nil-AAD fallback and are re-sealed with the primary key + AAD on first use — the
+  same opportunistic re-seal is what completes a key rotation without forcing users
+  to re-link. A token no key can decrypt does not brick the item: disconnect proceeds
+  with local cleanup (the Plaid-side Item must then be removed in the dashboard).
+- **`plaid_migration_audit` retention.** Rows backed up by destructive migrations are
+  kept indefinitely as an audit trail (they contain only ciphertexts, never plaintext
+  tokens); operators may prune manually. The table is dropped by 000008's down.
+- **E2E coverage.** Unit/integration suites cover backend and component logic; the
+  real Plaid Link flow cannot run headless without sandbox credentials, so end-to-end
+  validation of connect→sync→import stays a manual Sandbox checklist (§10).
 - **Concurrent syncs are serialized per item** (Postgres advisory lock). The loser
   doesn't fetch: it serves the durable staged suggestions and marks the response
   `in_progress` so the UI can tell the user results may be incomplete.

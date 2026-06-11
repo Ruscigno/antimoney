@@ -1029,6 +1029,165 @@ func TestPlaidDismissCrossBookIDOR(t *testing.T) {
 	}
 }
 
+// TestPlaidDisconnectForcedWhenTokenUndecryptable (round-9 #2): a token that no
+// key can decrypt is unusable for /item/remove forever — disconnect must clean
+// up locally instead of bricking the item.
+func TestPlaidDisconnectForcedWhenTokenUndecryptable(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+
+	w := httptest.NewRecorder()
+	h.handleExchange(w, authedRequest("POST", "/exchange", map[string]string{"public_token": "tok"}, bookGUID, userID))
+	var ex struct {
+		ItemGUID string `json:"item_guid"`
+	}
+	json.NewDecoder(w.Body).Decode(&ex)
+
+	if _, err := db.Pool.Exec(context.Background(),
+		`UPDATE plaid_items SET access_token_ciphertext = 'garbage' WHERE guid = $1`, ex.ItemGUID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("DELETE", "/items/"+ex.ItemGUID, nil)
+	ctx := context.WithValue(req.Context(), auth.BookGUIDKey, bookGUID)
+	ctx = context.WithValue(ctx, auth.UserIDKey, userID)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("guid", ex.ItemGUID)
+	req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, rctx))
+
+	w = httptest.NewRecorder()
+	h.handleDisconnect(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("forced disconnect: got %d, want 204: %s", w.Code, w.Body)
+	}
+	if fake.removeCalls != 0 {
+		t.Fatalf("RemoveItem must not be attempted with an undecryptable token, called %d times", fake.removeCalls)
+	}
+	var cnt int
+	db.Pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, ex.ItemGUID).Scan(&cnt)
+	if cnt != 0 {
+		t.Fatalf("row must be deleted on forced disconnect, %d remain", cnt)
+	}
+}
+
+// TestPlaidLegacyNilAADTokenIsReSealed (round-9 #1/#7): tokens sealed before
+// AAD was introduced must still decrypt (compat fallback) and be re-sealed
+// with the primary key + AAD on first use.
+func TestPlaidLegacyNilAADTokenIsReSealed(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	// Re-seal the row the legacy way: same key (all-zero test key), nil AAD.
+	key := make([]byte, 32)
+	legacyCT, legacyNonce, err := encrypt(key, "access-sandbox-test-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(context.Background(),
+		`UPDATE plaid_items SET access_token_ciphertext = $1, access_token_nonce = $2 WHERE guid = $3`,
+		legacyCT, legacyNonce, itemGUID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Sync must succeed via the legacy fallback…
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if res.Count != 2 {
+		t.Fatalf("sync with legacy-sealed token: expected 2 suggestions, got %d", res.Count)
+	}
+
+	// …and the stored ciphertext must now authenticate WITH the canonical AAD.
+	var ct, nonce []byte
+	var itemID string
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT access_token_ciphertext, access_token_nonce, item_id FROM plaid_items WHERE guid = $1`, itemGUID,
+	).Scan(&ct, &nonce, &itemID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decrypt(key, ct, nonce, tokenAAD(bookGUID, itemID)); err != nil {
+		t.Fatalf("token was not re-sealed with AAD after legacy decrypt: %v", err)
+	}
+}
+
+// TestPlaidDismissalSurvivesCrossPagePendingToPosted (round-9 #8): the pending
+// is removed in one page/call and the posted successor only arrives later —
+// the dismissal must still be inherited (tombstone semantics).
+func TestPlaidDismissalSurvivesCrossPagePendingToPosted(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	posted := fakeTxn("txn-Q", "Subscription (posted)", 100, false)
+	posted.PendingTransactionID = "txn-P"
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Subscription", 100, true)}},
+		{Removed: []string{"txn-P"}}, // pending removed in its own call…
+		{Added: []PlaidTxn{posted}},  // …posted arrives only on the NEXT call
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+
+	doSync(t, h, itemGUID, bookGUID, userID)
+	w := httptest.NewRecorder()
+	h.handleDismiss(w, authedRequest("POST", "/dismiss", map[string]interface{}{"transaction_ids": []string{"txn-P"}}, bookGUID, userID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("dismiss: %d", w.Code)
+	}
+
+	doSync(t, h, itemGUID, bookGUID, userID) // applies Removed[txn-P]
+	final := doSync(t, h, itemGUID, bookGUID, userID)
+	if final.Count != 0 {
+		t.Fatalf("dismissal must survive the cross-page pending→posted handoff, got %+v", final.Suggestions)
+	}
+}
+
+// TestPlaidZeroAmountSkipped (round-9 #9): $0 transactions are not
+// representable in a double-entry book and must be dropped at staging.
+func TestPlaidZeroAmountSkipped(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	fake.deltaPages = []SyncDelta{{Added: []PlaidTxn{fakeTxn("txn-zero", "Card check", 0, false)}}}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if res.Count != 0 {
+		t.Fatalf("zero-amount txn must not be suggested, got %d", res.Count)
+	}
+	var staged int
+	db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1`, bookGUID).Scan(&staged)
+	if staged != 0 {
+		t.Fatalf("zero-amount txn must not be staged, got %d rows", staged)
+	}
+}
+
+// denyAllLimiter stubs the rate limiter for the 429 paths.
+type denyAllLimiter struct{}
+
+func (denyAllLimiter) AllowN(_ context.Context, _ string, _ int) bool { return false }
+
+// TestPlaidRateLimited (round-9 #4/#6): every metered endpoint returns 429
+// when the per-user budget is exhausted.
+func TestPlaidRateLimited(t *testing.T) {
+	h, _, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	h.limiter = denyAllLimiter{}
+
+	w := httptest.NewRecorder()
+	h.handleLinkToken(w, authedRequest("POST", "/link-token", nil, bookGUID, userID))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("link-token: got %d, want 429", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.handleExchange(w, authedRequest("POST", "/exchange", map[string]string{"public_token": "tok"}, bookGUID, userID))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("exchange: got %d, want 429", w.Code)
+	}
+	w = httptest.NewRecorder()
+	h.handleSync(w, authedRequest("POST", "/sync", map[string]string{"item_guid": "00000000-0000-0000-0000-000000000001"}, bookGUID, userID))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("sync: got %d, want 429", w.Code)
+	}
+}
+
 func TestPlaidSyncReauthRequired(t *testing.T) {
 	h, fake, db, bookGUID, userID := setupTestHandler(t)
 	defer db.Teardown(context.Background())

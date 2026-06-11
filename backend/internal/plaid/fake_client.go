@@ -16,6 +16,7 @@ type fakePlaidClient struct {
 	deltaPages  []SyncDelta // one delta per SyncTransactions call
 	pageIndex   int
 	removeErr   error
+	removeCalls int
 	syncErr     error // returned by SyncTransactions when set
 	// onePagePerSync reports has_more=false after every page, so each Sync()
 	// call consumes exactly one page (simulates deltas arriving over time).
@@ -85,5 +86,6 @@ func (f *fakePlaidClient) SyncTransactions(_ context.Context, _, _ string) (Sync
 }
 
 func (f *fakePlaidClient) RemoveItem(_ context.Context, _ string) error {
+	f.removeCalls++
 	return f.removeErr
 }

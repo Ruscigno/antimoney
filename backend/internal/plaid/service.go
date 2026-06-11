@@ -36,9 +36,10 @@ type PlaidService struct {
 	pool   *pgxpool.Pool
 	client PlaidClient
 	// encKeys holds the token-encryption keys: encKeys[0] encrypts; ALL keys
-	// are tried on decrypt. This is the rotation path — prepend a new key to
-	// PLAID_TOKEN_ENC_KEY and old tokens keep decrypting until re-encrypted by
-	// the next Exchange.
+	// are tried on decrypt. Rotation: prepend a new key — old tokens keep
+	// decrypting and are opportunistically re-sealed with the primary key on
+	// the next successful use (loadAndDecryptToken). A retired key can only be
+	// dropped from the list once no stored token still depends on it.
 	encKeys [][]byte
 	txSvc   *services.TransactionService
 	cat     Categorizer
@@ -81,16 +82,51 @@ func (s *PlaidService) encryptToken(bookGUID, itemID, token string) (ciphertext,
 	return encrypt(s.encKeys[0], token, tokenAAD(bookGUID, itemID))
 }
 
-func (s *PlaidService) decryptToken(bookGUID, itemID string, ciphertext, nonce []byte) (string, error) {
+// decryptToken tries every key with the canonical AAD, then every key with a
+// nil AAD (legacy compatibility: ciphertexts sealed before AAD was introduced).
+// stale=true means the caller should re-seal with the primary key + AAD.
+func (s *PlaidService) decryptToken(bookGUID, itemID string, ciphertext, nonce []byte) (token string, stale bool, err error) {
 	var lastErr error
-	for _, key := range s.encKeys {
-		token, err := decrypt(key, ciphertext, nonce, tokenAAD(bookGUID, itemID))
-		if err == nil {
-			return token, nil
+	for i, key := range s.encKeys {
+		if token, err := decrypt(key, ciphertext, nonce, tokenAAD(bookGUID, itemID)); err == nil {
+			return token, i > 0, nil
+		} else {
+			lastErr = err
 		}
-		lastErr = err
 	}
-	return "", lastErr
+	for _, key := range s.encKeys {
+		if token, err := decrypt(key, ciphertext, nonce, nil); err == nil {
+			log.Printf("plaid: token for item %s decrypted via legacy nil-AAD format; re-sealing", itemID)
+			return token, true, nil
+		} else {
+			lastErr = err
+		}
+	}
+	return "", false, lastErr
+}
+
+// loadAndDecryptToken loads an item's access token, decrypting with rotation
+// and legacy fallbacks, and opportunistically re-seals stale ciphertexts
+// (retired key or legacy nil-AAD format) with the primary key — this is what
+// makes key rotation eventually complete without forcing users to re-link.
+func (s *PlaidService) loadAndDecryptToken(ctx context.Context, bookGUID, itemGUID, itemID string, ciphertext, nonce []byte) (string, error) {
+	token, stale, err := s.decryptToken(bookGUID, itemID, ciphertext, nonce)
+	if err != nil {
+		return "", err
+	}
+	if stale {
+		if ct, n, sealErr := s.encryptToken(bookGUID, itemID, token); sealErr == nil {
+			if _, upErr := s.pool.Exec(ctx,
+				`UPDATE plaid_items
+				 SET access_token_ciphertext = $1, access_token_nonce = $2, updated_at = NOW(), version = version + 1
+				 WHERE guid = $3 AND book_guid = $4`,
+				ct, n, itemGUID, bookGUID,
+			); upErr != nil {
+				log.Printf("plaid: re-seal token for item %s: %v", itemGUID, upErr) // best-effort
+			}
+		}
+	}
+	return token, nil
 }
 
 // CreateLinkToken creates a Plaid Link token for the requesting user, with the
@@ -309,7 +345,7 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		return nil, err
 	}
 
-	accessToken, err := s.decryptToken(bookGUID, itemID, ciphertext, nonce)
+	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt access token: %w", err)
 	}
@@ -382,8 +418,9 @@ func (s *PlaidService) Sync(ctx context.Context, itemGUID string) (*SyncResult, 
 		return nil, fmt.Errorf("iterate linked accounts: %w", err)
 	}
 
-	// Suggestions are rebuilt from durable staging on every sync — dismissed or
-	// lost suggestions reappear until imported. The dedupe against already-
+	// Suggestions are rebuilt from durable staging on every sync — a lost
+	// response or dismissed modal costs nothing: unimported rows reappear,
+	// while explicitly DISMISSED rows never do. The dedupe against already-
 	// imported transactions happens in SQL (one query, not one per row); pgx
 	// caches/prepares these statements automatically.
 	type stagedTxn struct {
@@ -566,7 +603,9 @@ func (s *PlaidService) fetchAndStage(ctx context.Context, bookGUID, itemGUID, ac
 		 WHERE book_guid = $3 AND metadata->'plaid'->>'item_guid' = $4`,
 		now.Format(time.RFC3339), now, bookGUID, itemGUID,
 	); err != nil {
-		log.Printf("plaid sync: propagate last_synced_at: %v", err)
+		// Same policy as the cursor write above: a DB failure here must be
+		// visible, not a silent log (the auto-sync trigger reads this value).
+		return false, fmt.Errorf("propagate last_synced_at: %w", err)
 	}
 	return hasMore, nil
 }
@@ -580,6 +619,14 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 	// predecessor in Removed, and deleting it first would destroy the state the
 	// posted row must inherit from it (the dismissed flag, notably).
 	for _, txn := range append(append([]PlaidTxn{}, delta.Added...), delta.Modified...) {
+		if txn.AmountNum == 0 {
+			// A $0 transaction cannot exist in a double-entry book (zero-value
+			// splits are dropped, leaving <2 splits) — importing it would fail
+			// forever and the pending→posted value correlation can never match
+			// a split that was never written. Skip at the source.
+			log.Printf("plaid sync: skipping zero-amount txn %s (not representable in a double-entry book)", txn.TransactionID)
+			continue
+		}
 		dismissed := false
 		if txn.PendingTransactionID != "" {
 			imported, err := s.transactionExists(ctx, bookGUID, txn.PendingTransactionID)
@@ -665,8 +712,14 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 			return fmt.Errorf("iterate removed-imported ids: %w", err)
 		}
 
+		// Dismissed rows are kept as tombstones instead of deleted: the posted
+		// successor of a dismissed pending may only arrive in a LATER sync page
+		// (or call), and the dismissal inheritance reads the predecessor's row.
+		// Tombstones are invisible (suggestions filter on dismissed) and bounded
+		// by the number of explicit dismissals.
 		if _, err := s.pool.Exec(ctx,
-			`DELETE FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = ANY($2)`,
+			`DELETE FROM plaid_staged_transactions
+			 WHERE book_guid = $1 AND transaction_id = ANY($2) AND NOT dismissed`,
 			bookGUID, delta.Removed,
 		); err != nil {
 			return fmt.Errorf("remove staged: %w", err)
@@ -913,14 +966,17 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 		return err
 	}
 
-	accessToken, err := s.decryptToken(bookGUID, itemID, ciphertext, nonce)
+	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce)
 	if err != nil {
-		return fmt.Errorf("decrypt access token: %w", err)
-	}
-
-	if rmErr := s.client.RemoveItem(ctx, accessToken); rmErr != nil {
-		// Abort: deleting the local row would destroy the only copy of the
-		// access token while the Item stays alive (and billable) at Plaid.
+		// An undecryptable token (every key + legacy fallback failed) is
+		// unusable for /item/remove — forever. Aborting here would brick the
+		// item: no sync, no disconnect, and the down-migration guard refuses
+		// rollback while the row exists. Proceed with LOCAL deletion and tell
+		// the operator the Item must be removed in the Plaid dashboard.
+		log.Printf("plaid disconnect: token for item %s is undecryptable (%v); deleting locally — remove the Item in the Plaid dashboard to stop billing", itemGUID, err)
+	} else if rmErr := s.client.RemoveItem(ctx, accessToken); rmErr != nil {
+		// Abort: the token is VALID, so deleting the local row would destroy
+		// the only copy while the Item stays alive (and billable) at Plaid.
 		// Keeping the row lets the user simply retry the disconnect.
 		log.Printf("plaid RemoveItem failed; aborting disconnect: %v", rmErr)
 		return fmt.Errorf("plaid item removal failed")

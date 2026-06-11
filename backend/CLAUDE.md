@@ -84,7 +84,12 @@ Split `reconcile_state` is a single character:
 - Files live in `migrations/` as `NNNNNN_name.up.sql` / `NNNNNN_name.down.sql`.
 - Migrations run automatically at startup via `database.RunMigrations()`.
 - Use sequential 6-digit prefixes for new migrations (e.g., `000006_...`).
-- **Never edit an existing migration** — always add a new one.
+- **Never edit an existing migration once it is on `main`** — always add a new one.
+  While a migration only exists on an unmerged feature branch it MAY be amended in
+  place, but only if the amendment cannot change the outcome on databases that
+  already ran the earlier version (e.g. adding an audit INSERT whose target rows
+  provably cannot exist yet). Schema-visible changes (new constraints/columns)
+  always go in a new migration even pre-merge.
 
 ## Testing
 

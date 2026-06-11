@@ -1,6 +1,7 @@
 package plaid
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -11,8 +12,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/user/antimoney/internal/auth"
 	"github.com/user/antimoney/internal/handlers"
-	"github.com/user/antimoney/internal/ratelimit"
 )
+
+// rateLimiter is the slice of the ratelimit API the handler needs — an
+// interface so tests can stub the 429 path without a Redis instance.
+// *ratelimit.Limiter satisfies it (including with a nil receiver: fail-open).
+type rateLimiter interface {
+	AllowN(ctx context.Context, key string, perMinute int) bool
+}
 
 // isUUID rejects malformed ids at the boundary — a non-UUID would otherwise
 // fail the Postgres uuid cast deep in the service and surface as a 500.
@@ -24,10 +31,10 @@ func isUUID(s string) bool {
 // PlaidHandler is the thin HTTP layer over PlaidService.
 type PlaidHandler struct {
 	svc     *PlaidService
-	limiter *ratelimit.Limiter // nil-safe: rate checks fail open without Redis
+	limiter rateLimiter // nil-safe: rate checks fail open without Redis
 }
 
-func NewPlaidHandler(svc *PlaidService, limiter *ratelimit.Limiter) *PlaidHandler {
+func NewPlaidHandler(svc *PlaidService, limiter rateLimiter) *PlaidHandler {
 	return &PlaidHandler{svc: svc, limiter: limiter}
 }
 
@@ -35,11 +42,15 @@ func NewPlaidHandler(svc *PlaidService, limiter *ratelimit.Limiter) *PlaidHandle
 // amplification needs a ceiling. Generous for humans, tight for loops.
 const (
 	linkTokenPerMinute = 10
+	exchangePerMinute  = 10
 	syncPerMinute      = 30
 	maxLinkMappings    = 100
 )
 
 func (h *PlaidHandler) allow(r *http.Request, op string, perMinute int) bool {
+	if h.limiter == nil {
+		return true
+	}
 	return h.limiter.AllowN(r.Context(), "plaid:"+op+":"+auth.UserIDFromCtx(r.Context()), perMinute)
 }
 
@@ -86,6 +97,11 @@ func (h *PlaidHandler) handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PublicToken == "" {
 		handlers.WriteErrorPublic(w, http.StatusBadRequest, "public_token is required")
+		return
+	}
+	// Exchange fires two metered Plaid calls — same cost ceiling as link-token.
+	if !h.allow(r, "exchange", exchangePerMinute) {
+		handlers.WriteErrorPublic(w, http.StatusTooManyRequests, "rate limit exceeded")
 		return
 	}
 	result, err := h.svc.Exchange(r.Context(), req.PublicToken)

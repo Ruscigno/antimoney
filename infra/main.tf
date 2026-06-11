@@ -30,10 +30,47 @@ resource "google_project_service" "apis" {
     "compute.googleapis.com",
     "run.googleapis.com",
     "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com"
+    "cloudbuild.googleapis.com",
+    "secretmanager.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
+}
+
+# Plaid secrets live in Secret Manager, not as plaintext env vars: env vars are
+# readable by any principal with run.services.get and land verbatim in the
+# Terraform state. Created only when the feature is configured. (JWT_SECRET /
+# DATABASE_URL predate this PR and keep their existing pattern.)
+locals {
+  plaid_secrets = var.plaid_secret == "" ? {} : {
+    "plaid-secret"        = var.plaid_secret
+    "plaid-token-enc-key" = var.plaid_token_enc_key
+  }
+}
+
+resource "google_secret_manager_secret" "plaid" {
+  for_each  = local.plaid_secrets
+  secret_id = each.key
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_version" "plaid" {
+  for_each    = local.plaid_secrets
+  secret      = google_secret_manager_secret.plaid[each.key].id
+  secret_data = each.value
+}
+
+data "google_project" "current" {}
+
+# The backend's Cloud Run runtime SA must be able to read the secrets.
+resource "google_secret_manager_secret_iam_member" "plaid_accessor" {
+  for_each  = google_secret_manager_secret.plaid
+  secret_id = each.value.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
 }
 
 # 2. Firewall rule to allow internal traffic to Postgres port 5432
@@ -185,19 +222,23 @@ resource "google_cloud_run_v2_service" "backend" {
       }
       env {
         name  = "PLAID_CLIENT_ID"
-        value = var.plaid_client_id
-      }
-      env {
-        name  = "PLAID_SECRET"
-        value = var.plaid_secret
+        value = var.plaid_client_id # an identifier, not a secret
       }
       env {
         name  = "PLAID_ENV"
         value = var.plaid_env
       }
-      env {
-        name  = "PLAID_TOKEN_ENC_KEY"
-        value = var.plaid_token_enc_key
+      dynamic "env" {
+        for_each = google_secret_manager_secret.plaid
+        content {
+          name = env.key == "plaid-secret" ? "PLAID_SECRET" : "PLAID_TOKEN_ENC_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = env.value.secret_id
+              version = "latest"
+            }
+          }
+        }
       }
     }
 
