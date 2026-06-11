@@ -77,10 +77,20 @@ func TestAllowNWindowAccounting(t *testing.T) {
 		t.Fatal("a different operation must have an independent budget")
 	}
 
-	// After the window passes, the budget resets: the bucket key changes with
-	// the (pinned, now advanced) clock and the old key's TTL lapses.
-	frozen = frozen.Add(3 * time.Minute)
+	// The TTL itself must be real, not just a key change: the old bucket key
+	// exists now and must be GONE after the window lapses in Redis — this
+	// would fail if the Expire call were ever removed.
+	oldKey := "rl:plaid:sync:user-a:" + frozen.UTC().Format("2006-01-02T15:04")
+	if !srv.Exists(oldKey) {
+		t.Fatalf("expected bucket key %q to exist before expiry", oldKey)
+	}
 	srv.FastForward(3 * time.Minute)
+	if srv.Exists(oldKey) {
+		t.Fatalf("bucket key %q must expire via TTL", oldKey)
+	}
+
+	// And after the window passes, the budget resets for the advanced clock.
+	frozen = frozen.Add(3 * time.Minute)
 	if !l.AllowN(ctx, "plaid:sync:user-a", 5) {
 		t.Fatal("budget must reset after the window expires")
 	}

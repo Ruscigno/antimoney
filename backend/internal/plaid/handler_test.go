@@ -1134,8 +1134,11 @@ func TestPlaidLegacyTokenDisconnectAborts(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h.handleDisconnect(w, req)
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("legacy-token disconnect must abort, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("legacy-token disconnect must abort with an actionable 409, got %d", w.Code)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("legacy_token_needs_flag")) {
+		t.Fatalf("response must carry the machine-readable code, got %s", w.Body)
 	}
 	if fake.removeCalls != 0 {
 		t.Fatalf("RemoveItem must not run on a legacy token with the flag off")
@@ -1204,6 +1207,33 @@ func TestPlaidZeroSettleDropsPendingStagedRow(t *testing.T) {
 	second := doSync(t, h, itemGUID, bookGUID, userID)
 	if second.Count != 0 {
 		t.Fatalf("$0 settle must clear the pending's stale suggestion, got %+v", second.Suggestions)
+	}
+}
+
+// TestPlaidZeroSettleInSamePage (round-12 #3): the $0 settle and the non-zero
+// pending arrive in the SAME Added page with the pending ordered AFTER the
+// zero — the cleanup must still win (two-pass staging).
+func TestPlaidZeroSettleInSamePage(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	zeroPosted := fakeTxn("txn-Q", "Hold (settled)", 0, false)
+	zeroPosted.PendingTransactionID = "txn-P"
+	fake.deltaPages = []SyncDelta{
+		// Malicious ordering: zero first, its non-zero pending second.
+		{Added: []PlaidTxn{zeroPosted, fakeTxn("txn-P", "Hold", 500, true)}},
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+
+	res := doSync(t, h, itemGUID, bookGUID, userID)
+	if res.Count != 0 {
+		t.Fatalf("in-page $0 settle must suppress the pending suggestion regardless of ordering, got %+v", res.Suggestions)
+	}
+	var staged int
+	db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = 'txn-P'`,
+		bookGUID).Scan(&staged)
+	if staged != 0 {
+		t.Fatalf("in-page pending must be cleaned by the zero pass, %d remain", staged)
 	}
 }
 

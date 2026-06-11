@@ -30,6 +30,9 @@ var (
 	// PLAID_LEGACY_TOKEN_FALLBACK, let the re-seal migrate, disable), so
 	// destructive fallbacks must not engage.
 	ErrLegacyTokenNeedsFlag = errors.New("token is sealed in the legacy format; enable PLAID_LEGACY_TOKEN_FALLBACK to migrate it cleanly")
+	// ErrConcurrentModification: the row changed (re-link bumped its version)
+	// between read and write — the operation is safe to simply retry.
+	ErrConcurrentModification = errors.New("item changed concurrently; retry")
 )
 
 // maxSyncPages caps the number of /transactions/sync pages per API call to
@@ -641,41 +644,15 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 	// Upserts run BEFORE removals: a pending→posted delta carries the pending
 	// predecessor in Removed, and deleting it first would destroy the state the
 	// posted row must inherit from it (the dismissed flag, notably).
-	for _, txn := range append(append([]PlaidTxn{}, delta.Added...), delta.Modified...) {
+	all := append(append([]PlaidTxn{}, delta.Added...), delta.Modified...)
+
+	// Two passes: zero-amount entries are handled AFTER every upsert. A $0
+	// settle and its non-zero pending can arrive in the SAME page in either
+	// order, and the stale-suggestion cleanup must win regardless of ordering.
+	var zeroed []PlaidTxn
+	for _, txn := range all {
 		if txn.AmountNum == 0 {
-			// A $0 transaction cannot exist in a double-entry book (zero-value
-			// splits are dropped, leaving <2 splits) — importing it would fail
-			// forever and the pending→posted value correlation can never match
-			// a split that was never written. Skip at the source, but:
-			// (a) drop any stale non-zero staged copy (a Modified that zeroed
-			//     the value must not leave the old suggestion importable), and
-			// (b) surface the divergence when a pending we already imported
-			//     posted/settled at $0 — the book now disagrees with the bank.
-			// Drop the stale copies of BOTH the zeroed txn and its pending
-			// predecessor (a $0 settle whose pending isn't in this delta's
-			// Removed list would otherwise leave the non-zero suggestion alive).
-			staleIDs := []string{txn.TransactionID}
-			if txn.PendingTransactionID != "" {
-				staleIDs = append(staleIDs, txn.PendingTransactionID)
-			}
-			if _, err := s.pool.Exec(ctx,
-				`DELETE FROM plaid_staged_transactions
-				 WHERE book_guid = $1 AND transaction_id = ANY($2) AND NOT dismissed`,
-				bookGUID, staleIDs,
-			); err != nil {
-				return fmt.Errorf("drop zeroed staged txn %s: %w", txn.TransactionID, err)
-			}
-			for _, id := range []string{txn.TransactionID, txn.PendingTransactionID} {
-				if id == "" {
-					continue
-				}
-				if imported, err := s.transactionExists(ctx, bookGUID, id); err != nil {
-					return fmt.Errorf("zero-amount divergence check for %s: %w", id, err)
-				} else if imported {
-					log.Printf("plaid sync: txn %s was imported with a non-zero value but the bank now reports $0 — books may diverge from the bank", id)
-				}
-			}
-			log.Printf("plaid sync: skipping zero-amount txn %s (not representable in a double-entry book)", txn.TransactionID)
+			zeroed = append(zeroed, txn)
 			continue
 		}
 		dismissed := false
@@ -736,6 +713,36 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 		); err != nil {
 			return fmt.Errorf("stage txn %s: %w", txn.TransactionID, err)
 		}
+	}
+
+	for _, txn := range zeroed {
+		// A $0 transaction cannot exist in a double-entry book (zero-value
+		// splits are dropped, leaving <2 splits) — importing it would fail
+		// forever and the pending→posted value correlation can never match a
+		// split that was never written. Skip at the source, but:
+		// (a) drop the stale non-zero staged copies of BOTH the zeroed txn and
+		//     its pending predecessor (running after the upsert pass, so an
+		//     in-page pending staged moments ago is cleaned too), and
+		// (b) surface the divergence when a txn we already imported settles $0.
+		staleIDs := []string{txn.TransactionID}
+		if txn.PendingTransactionID != "" {
+			staleIDs = append(staleIDs, txn.PendingTransactionID)
+		}
+		if _, err := s.pool.Exec(ctx,
+			`DELETE FROM plaid_staged_transactions
+			 WHERE book_guid = $1 AND transaction_id = ANY($2) AND NOT dismissed`,
+			bookGUID, staleIDs,
+		); err != nil {
+			return fmt.Errorf("drop zeroed staged txn %s: %w", txn.TransactionID, err)
+		}
+		for _, id := range staleIDs {
+			if imported, err := s.transactionExists(ctx, bookGUID, id); err != nil {
+				return fmt.Errorf("zero-amount divergence check for %s: %w", id, err)
+			} else if imported {
+				log.Printf("plaid sync: txn %s was imported with a non-zero value but the bank now reports $0 — books may diverge from the bank", id)
+			}
+		}
+		log.Printf("plaid sync: skipping zero-amount txn %s (not representable in a double-entry book)", txn.TransactionID)
 	}
 
 	if len(delta.Removed) > 0 {
@@ -1068,7 +1075,7 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 			return fmt.Errorf("archive item before forced disconnect: %w", err)
 		}
 		if ct.RowsAffected() == 0 {
-			return fmt.Errorf("item changed concurrently during forced disconnect; retry")
+			return ErrConcurrentModification
 		}
 	}
 
@@ -1091,7 +1098,7 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 			return err
 		}
 		if ct.RowsAffected() == 0 {
-			return fmt.Errorf("item changed concurrently during forced disconnect; retry")
+			return ErrConcurrentModification
 		}
 	} else if _, err := tx.Exec(ctx,
 		`DELETE FROM plaid_items WHERE guid = $1 AND book_guid = $2`, itemGUID, bookGUID,

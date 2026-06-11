@@ -258,6 +258,17 @@ func (h *PlaidHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) 
 			handlers.WriteErrorPublic(w, http.StatusNotFound, "item not found")
 			return
 		}
+		// Actionable outcomes get actionable statuses (precedent:
+		// reconnect_required). The frontend shows a generic message either way;
+		// the machine-readable code tells an operator what to actually do.
+		if errors.Is(err, ErrLegacyTokenNeedsFlag) {
+			handlers.WriteErrorPublic(w, http.StatusConflict, "legacy_token_needs_flag")
+			return
+		}
+		if errors.Is(err, ErrConcurrentModification) {
+			handlers.WriteErrorPublic(w, http.StatusConflict, "conflict_retry")
+			return
+		}
 		log.Printf("plaid disconnect: %v", err)
 		handlers.WriteErrorPublic(w, http.StatusInternalServerError, "disconnect failed")
 		return

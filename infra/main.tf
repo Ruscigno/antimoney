@@ -65,6 +65,24 @@ resource "google_secret_manager_secret" "plaid" {
 
 data "google_project" "current" {}
 
+# Validates bootstrap step 2 actually happened, METADATA-ONLY: the provider's
+# plural versions data source (no secret_data) requires google provider 6.x,
+# and the singular one would copy secret_data into the state — the exact leak
+# this design eliminates. gcloud (already required by deploy.sh) lists version
+# names only; nothing sensitive enters the state.
+data "external" "plaid_secret_has_version" {
+  for_each = var.plaid_secrets_ready ? google_secret_manager_secret.plaid : {}
+  program = ["bash", "-c", <<-EOT
+    if gcloud secrets versions list ${each.value.secret_id} --project ${var.project_id} --filter='state=ENABLED' --format='value(name)' --limit=1 2>/dev/null | grep -q .; then
+      echo '{"has_version":"true"}'
+    else
+      echo '{"has_version":"false"}'
+    fi
+  EOT
+  ]
+  depends_on = [google_secret_manager_secret.plaid]
+}
+
 # The backend's Cloud Run runtime SA must be able to read the secrets.
 resource "google_secret_manager_secret_iam_member" "plaid_accessor" {
   for_each  = google_secret_manager_secret.plaid
@@ -259,6 +277,18 @@ resource "google_cloud_run_v2_service" "backend" {
     ignore_changes = [
       template[0].containers[0].image, # Ignore image changes so deployments outside TF don't get reverted
     ]
+    # Bootstrap-order guards (round-12 #4): catch misuse at plan time instead
+    # of failing the Cloud Run rollout.
+    precondition {
+      condition     = !var.plaid_secrets_ready || var.enable_plaid
+      error_message = "plaid_secrets_ready=true requires enable_plaid=true (the secrets must exist before they can be wired)."
+    }
+    precondition {
+      condition = alltrue([
+        for k, v in data.external.plaid_secret_has_version : v.result.has_version == "true"
+      ])
+      error_message = "plaid_secrets_ready=true but a Plaid secret has no ENABLED version yet — run bootstrap step 2 (gcloud secrets versions add) first."
+    }
   }
 
   # The IAM grant (and the secrets it references) must exist before a revision
