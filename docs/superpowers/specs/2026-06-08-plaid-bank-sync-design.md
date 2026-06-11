@@ -300,9 +300,11 @@ multi-currency display; encryption-key rotation.
   misconfiguration stays operator-recoverable, and the Plaid-side Item must be
   removed in the dashboard.
 - **Secret provisioning.** Terraform manages only the Secret Manager containers and
-  IAM (`enable_plaid = true`); the secret values are added out-of-band with
-  `gcloud secrets versions add`, so they never pass through Terraform variables or
-  state.
+  IAM; the secret values are added out-of-band with `gcloud secrets versions add`,
+  so they never pass through Terraform variables or state. Bootstrap is three
+  ordered steps (Cloud Run validates `latest` at rollout): apply with
+  `enable_plaid=true` (containers+IAM) → add the versions via gcloud → apply again
+  with `plaid_secrets_ready=true` (wires the env).
 - **`plaid_migration_audit` retention.** Rows backed up by destructive migrations are
   kept indefinitely as an audit trail (they contain only ciphertexts, never plaintext
   tokens); operators may prune manually. The table is dropped by 000008's down.

@@ -1,6 +1,10 @@
 package config
 
-import "os"
+import (
+	"log"
+	"os"
+	"strconv"
+)
 
 type Config struct {
 	DatabaseURL        string
@@ -30,7 +34,7 @@ func Load() *Config {
 		PlaidSecret:              getEnv("PLAID_SECRET", ""),
 		PlaidEnv:                 getEnv("PLAID_ENV", "sandbox"),
 		PlaidTokenEncKey:         getEnv("PLAID_TOKEN_ENC_KEY", ""),
-		PlaidLegacyTokenFallback: getEnv("PLAID_LEGACY_TOKEN_FALLBACK", "") == "true",
+		PlaidLegacyTokenFallback: getBoolEnv("PLAID_LEGACY_TOKEN_FALLBACK"),
 	}
 }
 
@@ -39,4 +43,21 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getBoolEnv parses a boolean env var accepting the usual spellings
+// (true/TRUE/1/t, false/0/...) and WARNS on garbage instead of silently
+// treating it as off — these flags exist to be flipped deliberately in
+// operational emergencies, where a silent no-op is the worst outcome.
+func getBoolEnv(key string) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return false
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		log.Printf("config: invalid %s=%q (expected a boolean like true/false); treating as false", key, v)
+		return false
+	}
+	return b
 }

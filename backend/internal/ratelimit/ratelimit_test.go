@@ -47,13 +47,16 @@ func TestAllowNFailsOpenWhenRedisUnreachable(t *testing.T) {
 
 // TestAllowNWindowAccounting exercises the REAL counting behaviour against an
 // in-process Redis (miniredis): the budget is enforced, keys are isolated per
-// caller, and the bucket expires.
+// caller, and the bucket expires. The limiter clock is PINNED so the test can
+// never flake across a real minute boundary.
 func TestAllowNWindowAccounting(t *testing.T) {
 	srv := miniredis.RunT(t)
 	l, err := New("redis://" + srv.Addr())
 	if err != nil {
 		t.Fatal(err)
 	}
+	frozen := time.Date(2026, 6, 11, 12, 30, 30, 0, time.UTC)
+	l.now = func() time.Time { return frozen }
 	ctx := context.Background()
 
 	// Exactly perMinute calls pass; the next one in the same window is denied.
@@ -74,7 +77,9 @@ func TestAllowNWindowAccounting(t *testing.T) {
 		t.Fatal("a different operation must have an independent budget")
 	}
 
-	// The bucket has a TTL — after the window passes, the budget resets.
+	// After the window passes, the budget resets: the bucket key changes with
+	// the (pinned, now advanced) clock and the old key's TTL lapses.
+	frozen = frozen.Add(3 * time.Minute)
 	srv.FastForward(3 * time.Minute)
 	if !l.AllowN(ctx, "plaid:sync:user-a", 5) {
 		t.Fatal("budget must reset after the window expires")

@@ -44,7 +44,13 @@ variable "cors_allowed_origins" {
 # env; the secret VALUES are added out-of-band with `gcloud secrets versions
 # add` (see infra/main.tf) so they never pass through variables or state.
 variable "enable_plaid" {
-  description = "Provision Plaid Secret Manager containers and wire the backend env"
+  description = "Provision the Plaid Secret Manager containers and IAM (step 1 of the bootstrap)"
+  type        = bool
+  default     = false
+}
+
+variable "plaid_secrets_ready" {
+  description = "Wire the Plaid secrets into the backend env. Set to true ONLY after adding the secret versions out-of-band (step 3) — Cloud Run validates 'latest' at rollout and a versionless secret fails the deploy."
   type        = bool
   default     = false
 }

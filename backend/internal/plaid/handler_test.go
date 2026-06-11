@@ -1106,6 +1106,53 @@ func TestPlaidLegacyTokenRejectedWithoutFlag(t *testing.T) {
 	}
 }
 
+// TestPlaidLegacyTokenDisconnectAborts (round-11 #2): a legacy token with the
+// sunset flag OFF has a CLEAN recovery path (enable the flag) — disconnect
+// must abort with guidance, never archive-and-delete it.
+func TestPlaidLegacyTokenDisconnectAborts(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t) // flag off
+	defer db.Teardown(context.Background())
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, false)
+
+	key := make([]byte, 32)
+	legacyCT, legacyNonce, err := encrypt(key, "access-sandbox-test-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(context.Background(),
+		`UPDATE plaid_items SET access_token_ciphertext = $1, access_token_nonce = $2 WHERE guid = $3`,
+		legacyCT, legacyNonce, itemGUID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("DELETE", "/items/"+itemGUID, nil)
+	ctx := context.WithValue(req.Context(), auth.BookGUIDKey, bookGUID)
+	ctx = context.WithValue(ctx, auth.UserIDKey, userID)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("guid", itemGUID)
+	req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, rctx))
+
+	w := httptest.NewRecorder()
+	h.handleDisconnect(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("legacy-token disconnect must abort, got %d", w.Code)
+	}
+	if fake.removeCalls != 0 {
+		t.Fatalf("RemoveItem must not run on a legacy token with the flag off")
+	}
+	var cnt int
+	db.Pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, itemGUID).Scan(&cnt)
+	if cnt != 1 {
+		t.Fatalf("recoverable legacy row must be PRESERVED, got %d rows", cnt)
+	}
+	var archived int
+	db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_migration_audit WHERE migration = 'force-disconnect'`).Scan(&archived)
+	if archived != 0 {
+		t.Fatalf("legacy token must not be force-archived, found %d audit rows", archived)
+	}
+}
+
 // TestPlaidModifiedToZeroDropsStaleStagedRow (round-10 #5): a Modified delta
 // that zeroes a transaction must remove the stale non-zero suggestion.
 func TestPlaidModifiedToZeroDropsStaleStagedRow(t *testing.T) {
@@ -1132,6 +1179,31 @@ func TestPlaidModifiedToZeroDropsStaleStagedRow(t *testing.T) {
 		bookGUID).Scan(&staged)
 	if staged != 0 {
 		t.Fatalf("stale staged row must be deleted, %d remain", staged)
+	}
+}
+
+// TestPlaidZeroSettleDropsPendingStagedRow (round-11 #6): a $0 posted txn
+// whose pending predecessor is NOT in the same delta's Removed list must still
+// clear the pending's stale non-zero suggestion.
+func TestPlaidZeroSettleDropsPendingStagedRow(t *testing.T) {
+	h, fake, db, bookGUID, userID := setupTestHandler(t)
+	defer db.Teardown(context.Background())
+	zeroPosted := fakeTxn("txn-Q", "Hold (settled)", 0, false)
+	zeroPosted.PendingTransactionID = "txn-P"
+	fake.onePagePerSync = true
+	fake.deltaPages = []SyncDelta{
+		{Added: []PlaidTxn{fakeTxn("txn-P", "Hold", 500, true)}},
+		{Added: []PlaidTxn{zeroPosted}}, // note: txn-P deliberately NOT in Removed
+	}
+	itemGUID, _ := exchangeAndLink(t, h, db, bookGUID, userID, true)
+
+	first := doSync(t, h, itemGUID, bookGUID, userID)
+	if first.Count != 1 {
+		t.Fatalf("expected the pending $5 suggestion, got %d", first.Count)
+	}
+	second := doSync(t, h, itemGUID, bookGUID, userID)
+	if second.Count != 0 {
+		t.Fatalf("$0 settle must clear the pending's stale suggestion, got %+v", second.Suggestions)
 	}
 }
 

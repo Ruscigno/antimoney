@@ -25,6 +25,11 @@ var (
 	ErrAccountNotFound      = errors.New("account not found or access denied")
 	ErrAccountAlreadyLinked = errors.New("this Antimoney account is already linked to a bank account")
 	ErrInvalidEncKey        = errors.New("PLAID_TOKEN_ENC_KEY must be one or more comma-separated base64-encoded 32-byte keys")
+	// ErrLegacyTokenNeedsFlag: the token decrypts in the legacy nil-AAD format
+	// but the sunset flag is off — a CLEAN recovery path exists (enable
+	// PLAID_LEGACY_TOKEN_FALLBACK, let the re-seal migrate, disable), so
+	// destructive fallbacks must not engage.
+	ErrLegacyTokenNeedsFlag = errors.New("token is sealed in the legacy format; enable PLAID_LEGACY_TOKEN_FALLBACK to migrate it cleanly")
 )
 
 // maxSyncPages caps the number of /transactions/sync pages per API call to
@@ -102,14 +107,18 @@ func (s *PlaidService) decryptToken(bookGUID, itemID string, ciphertext, nonce [
 			lastErr = err
 		}
 	}
-	if s.allowLegacyTokens {
-		for _, key := range s.encKeys {
-			if token, err := decrypt(key, ciphertext, nonce, nil); err == nil {
+	for _, key := range s.encKeys {
+		if token, err := decrypt(key, ciphertext, nonce, nil); err == nil {
+			if s.allowLegacyTokens {
 				log.Printf("plaid: token for item %s decrypted via legacy nil-AAD format; re-sealing (disable PLAID_LEGACY_TOKEN_FALLBACK once no legacy tokens remain)", itemID)
 				return token, true, nil
-			} else {
-				lastErr = err
 			}
+			// Detection-only probe: the token IS recoverable via the sunset
+			// flag. Never hand it out with the flag off, but tell the caller
+			// the clean path exists so nothing destructive engages.
+			return "", false, ErrLegacyTokenNeedsFlag
+		} else {
+			lastErr = err
 		}
 	}
 	return "", false, lastErr
@@ -642,10 +651,17 @@ func (s *PlaidService) stageDelta(ctx context.Context, bookGUID, itemGUID string
 			//     the value must not leave the old suggestion importable), and
 			// (b) surface the divergence when a pending we already imported
 			//     posted/settled at $0 — the book now disagrees with the bank.
+			// Drop the stale copies of BOTH the zeroed txn and its pending
+			// predecessor (a $0 settle whose pending isn't in this delta's
+			// Removed list would otherwise leave the non-zero suggestion alive).
+			staleIDs := []string{txn.TransactionID}
+			if txn.PendingTransactionID != "" {
+				staleIDs = append(staleIDs, txn.PendingTransactionID)
+			}
 			if _, err := s.pool.Exec(ctx,
 				`DELETE FROM plaid_staged_transactions
-				 WHERE book_guid = $1 AND transaction_id = $2 AND NOT dismissed`,
-				bookGUID, txn.TransactionID,
+				 WHERE book_guid = $1 AND transaction_id = ANY($2) AND NOT dismissed`,
+				bookGUID, staleIDs,
 			); err != nil {
 				return fmt.Errorf("drop zeroed staged txn %s: %w", txn.TransactionID, err)
 			}
@@ -1005,7 +1021,14 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 	forced := false
 	accessToken, err := s.loadAndDecryptToken(ctx, bookGUID, itemGUID, itemID, ciphertext, nonce, itemVersion)
 	if err != nil {
-		// An undecryptable token (every configured key + enabled fallbacks
+		if errors.Is(err, ErrLegacyTokenNeedsFlag) {
+			// The token is perfectly recoverable: it decrypts in the legacy
+			// format and only the sunset flag is off. Abort — never destroy a
+			// token that has a clean migration path.
+			log.Printf("plaid disconnect: item %s holds a legacy-format token; enable PLAID_LEGACY_TOKEN_FALLBACK, retry the disconnect (or a sync, which re-seals it), then disable the flag", itemGUID)
+			return fmt.Errorf("token needs the legacy fallback flag: %w", err)
+		}
+		// A genuinely undecryptable token (every configured key + probes
 		// failed) is unusable for /item/remove. Aborting forever would brick
 		// the item (no sync, no disconnect, down-migration guard blocks
 		// rollback) — but the cause may be a RECOVERABLE key misconfiguration,
@@ -1030,14 +1053,22 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 
 	if forced {
 		// Archive the full row (ciphertext included) atomically with the
-		// deletion: a key misconfiguration stays recoverable by an operator.
-		if _, err := tx.Exec(ctx,
+		// deletion, OCC-guarded on the version read alongside the ciphertext:
+		// if a concurrent re-link (Exchange bumps version) replaced the token
+		// between the failed decrypt and this commit, archiving/deleting would
+		// destroy a NEW, VALID token — abort instead and let the caller retry
+		// against the fresh row.
+		ct, err := tx.Exec(ctx,
 			`INSERT INTO plaid_migration_audit (migration, payload)
 			 SELECT 'force-disconnect', to_jsonb(p.*) FROM plaid_items p
-			 WHERE p.guid = $1 AND p.book_guid = $2`,
-			itemGUID, bookGUID,
-		); err != nil {
+			 WHERE p.guid = $1 AND p.book_guid = $2 AND p.version = $3`,
+			itemGUID, bookGUID, itemVersion,
+		)
+		if err != nil {
 			return fmt.Errorf("archive item before forced disconnect: %w", err)
+		}
+		if ct.RowsAffected() == 0 {
+			return fmt.Errorf("item changed concurrently during forced disconnect; retry")
 		}
 	}
 
@@ -1051,8 +1082,20 @@ func (s *PlaidService) Disconnect(ctx context.Context, itemGUID string) error {
 		return err
 	}
 
-	_, err = tx.Exec(ctx, `DELETE FROM plaid_items WHERE guid = $1 AND book_guid = $2`, itemGUID, bookGUID)
-	if err != nil {
+	if forced {
+		ct, err := tx.Exec(ctx,
+			`DELETE FROM plaid_items WHERE guid = $1 AND book_guid = $2 AND version = $3`,
+			itemGUID, bookGUID, itemVersion,
+		)
+		if err != nil {
+			return err
+		}
+		if ct.RowsAffected() == 0 {
+			return fmt.Errorf("item changed concurrently during forced disconnect; retry")
+		}
+	} else if _, err := tx.Exec(ctx,
+		`DELETE FROM plaid_items WHERE guid = $1 AND book_guid = $2`, itemGUID, bookGUID,
+	); err != nil {
 		return err
 	}
 

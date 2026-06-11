@@ -40,10 +40,14 @@ resource "google_project_service" "apis" {
 # Plaid secrets live in Secret Manager, not as plaintext env vars: env vars are
 # readable by any principal with run.services.get and land verbatim in the
 # Terraform state. Terraform manages only the secret CONTAINERS and IAM; the
-# secret VALUES are added out-of-band so they never touch variables or state:
+# secret VALUES are added out-of-band so they never touch variables or state.
 #
-#   printf '%s' "$PLAID_SECRET"        | gcloud secrets versions add plaid-secret        --data-file=-
-#   printf '%s' "$PLAID_TOKEN_ENC_KEY" | gcloud secrets versions add plaid-token-enc-key --data-file=-
+# BOOTSTRAP ORDER (Cloud Run validates `latest` at rollout, so wiring the env
+# before a version exists fails the deploy — hence the two flags):
+#   1. terraform apply -var enable_plaid=true            # creates containers + IAM only
+#   2. printf '%s' "$PLAID_SECRET"        | gcloud secrets versions add plaid-secret        --data-file=-
+#      printf '%s' "$PLAID_TOKEN_ENC_KEY" | gcloud secrets versions add plaid-token-enc-key --data-file=-
+#   3. terraform apply -var enable_plaid=true -var plaid_secrets_ready=true   # wires the env
 #
 # (JWT_SECRET / DATABASE_URL predate this PR and keep their existing pattern.)
 locals {
@@ -225,7 +229,10 @@ resource "google_cloud_run_v2_service" "backend" {
         value = var.plaid_env
       }
       dynamic "env" {
-        for_each = google_secret_manager_secret.plaid
+        # Gated on plaid_secrets_ready: Cloud Run validates `latest` at rollout,
+        # so the env must only be wired after the versions exist (bootstrap
+        # step 3 — see the comment at the secret resources).
+        for_each = var.plaid_secrets_ready ? google_secret_manager_secret.plaid : {}
         content {
           name = env.key == "plaid-secret" ? "PLAID_SECRET" : "PLAID_TOKEN_ENC_KEY"
           value_source {
