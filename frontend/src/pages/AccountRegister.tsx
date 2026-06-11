@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { getAccount, getAccountRegister, getAccountRegisterPaged, deleteTransaction, getAccounts } from '../api/client';
+import { getAccount, getAccountRegister, getAccountRegisterPaged, deleteTransaction, getAccounts, plaidSync } from '../api/client';
 import Register from '../components/Register';
 import TransactionForm from '../components/TransactionForm';
 import ReconcileWizard from '../components/ReconcileWizard';
 import AccountBreadcrumbs from '../components/AccountBreadcrumbs';
-import type { Account, RegisterEntry } from '../types';
+import ImportMatcher from '../components/ImportMatcher';
+import type { Account, RegisterEntry, SyncSuggestion } from '../types';
+import { shouldAutoSyncToday, type PlaidAccountMeta } from '../utils/plaidSync';
 import { t } from '../i18n';
 import { useShortcut } from '../hooks/useShortcuts';
 import { filterRegisterEntries } from '../utils/registerSearch';
@@ -40,6 +42,10 @@ export default function AccountRegister() {
     const [showReconcile, setShowReconcile] = useState(false);
     const [hasBefore, setHasBefore] = useState(false);
     const [hasAfter, setHasAfter] = useState(false);
+    const [syncing, setSyncing] = useState(false);
+    const [syncMessage, setSyncMessage] = useState<string | null>(null);
+    const [importSuggestions, setImportSuggestions] = useState<SyncSuggestion[] | null>(null);
+    const [importInstitution, setImportInstitution] = useState('');
 
     // Search filters across ALL of the account's transactions (not just the loaded
     // page). When a query is active we lazily fetch the full register once and
@@ -166,6 +172,34 @@ export default function AccountRegister() {
         }
     };
 
+    const triggerSync = async (itemGUID: string, institutionName: string) => {
+        setSyncing(true);
+        setSyncMessage(t('plaid.syncing').replace('{{institution}}', institutionName));
+        try {
+            const result = await plaidSync(itemGUID);
+            const moreSuffix = (result.has_more ? ` ${t('plaid.syncMore')}` : '')
+                + (result.in_progress ? ` ${t('plaid.syncInProgress')}` : '');
+            if (result.count > 0) {
+                setSyncMessage(t('plaid.syncSuccess').replace('{{count}}', String(result.count)) + moreSuffix);
+                setImportSuggestions(result.suggestions);
+                setImportInstitution(institutionName);
+            } else {
+                setSyncMessage(t('plaid.syncNone') + moreSuffix);
+                setTimeout(() => setSyncMessage(null), 3000);
+            }
+        } catch (e) {
+            // "reconnect_required" is the backend's marker for ITEM_LOGIN_REQUIRED:
+            // tell the user to re-authorize instead of showing a generic failure.
+            setSyncMessage(
+                e instanceof Error && e.message === 'reconnect_required'
+                    ? t('plaid.reconnectNeeded')
+                    : t('plaid.syncError').replace('{{institution}}', institutionName),
+            );
+        } finally {
+            setSyncing(false);
+        }
+    };
+
     useEffect(() => {
         // jumpCursorDateRef.current is the cursor date from the current navigation —
         // kept in sync on every render, but intentionally not in deps so we only
@@ -186,6 +220,16 @@ export default function AccountRegister() {
         setAllEntries(null);
         setSearchError(null);
     }, [id]);
+
+    // Auto-sync on first open of the day if account is linked to Plaid.
+    // Trigger decision (incl. the timezone limitation) lives in shouldAutoSyncToday.
+    useEffect(() => {
+        const plaidMeta = (account?.metadata as any)?.plaid as PlaidAccountMeta | undefined;
+        if (plaidMeta?.item_guid && shouldAutoSyncToday(plaidMeta)) {
+            triggerSync(plaidMeta.item_guid, plaidMeta.institution_name ?? account?.name ?? t('plaid.bank'));
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [account?.guid]);
 
     // Lazily fetch the full register the first time a search is active (or after
     // the cache is invalidated by a data change). Fetched once, then filtered
@@ -225,7 +269,24 @@ export default function AccountRegister() {
             <AccountBreadcrumbs currentAccount={account} allAccounts={allAccounts} />
             <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                    <h1 className="page-title">{account.name}</h1>
+                    <h1 className="page-title">
+                        {account.name}
+                        {(account.metadata as any)?.plaid && (
+                            <span style={{ marginLeft: '0.5rem' }}>
+                                <button
+                                    className="btn btn-secondary"
+                                    onClick={() => {
+                                        const meta = (account.metadata as any).plaid as PlaidAccountMeta;
+                                        if (meta.item_guid) triggerSync(meta.item_guid, meta.institution_name ?? account.name);
+                                    }}
+                                    disabled={syncing}
+                                >
+                                    {syncing ? '…' : t('plaid.syncNow')}
+                                </button>
+                            </span>
+                        )}
+                        {syncMessage && <span style={{ marginLeft: '0.5rem', fontSize: '0.875rem', color: 'var(--text-muted)' }}>{syncMessage}</span>}
+                    </h1>
                     <p className="page-subtitle">{account.description || account.account_type}</p>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -315,6 +376,20 @@ export default function AccountRegister() {
                     accountType={account.account_type}
                     onClose={() => setShowReconcile(false)}
                     onFinished={handleDataChanged}
+                />
+            )}
+
+            {importSuggestions && (
+                <ImportMatcher
+                    institutionName={importInstitution}
+                    suggestions={importSuggestions}
+                    onClose={() => { setImportSuggestions(null); setSyncMessage(null); }}
+                    onImported={(count) => {
+                        setImportSuggestions(null);
+                        setSyncMessage(t('plaid.importSuccess').replace('{{count}}', String(count)));
+                        setTimeout(() => setSyncMessage(null), 4000);
+                        handleDataChanged();
+                    }}
                 />
             )}
         </div>

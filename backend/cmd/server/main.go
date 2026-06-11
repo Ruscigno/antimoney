@@ -20,6 +20,7 @@ import (
 	"github.com/user/antimoney/internal/config"
 	"github.com/user/antimoney/internal/database"
 	"github.com/user/antimoney/internal/handlers"
+	plaidpkg "github.com/user/antimoney/internal/plaid"
 	"github.com/user/antimoney/internal/ratelimit"
 	"github.com/user/antimoney/internal/scheduler"
 	"github.com/user/antimoney/internal/seed"
@@ -73,6 +74,21 @@ func main() {
 	acctSvc := services.NewAccountService(pool)
 	userSvc := auth.NewUserService(pool)
 	snapshotSvc := services.NewSnapshotService(pool)
+
+	// Conditionally enable Plaid bank sync
+	var plaidHandler *plaidpkg.PlaidHandler
+	if cfg.PlaidClientID != "" && cfg.PlaidSecret != "" && cfg.PlaidTokenEncKey != "" {
+		plaidClient := plaidpkg.NewRealPlaidClient(cfg.PlaidClientID, cfg.PlaidSecret, cfg.PlaidEnv)
+		plaidSvc, plaidErr := plaidpkg.NewPlaidService(pool, plaidClient, cfg.PlaidTokenEncKey, cfg.PlaidLegacyTokenFallback, txSvc)
+		if plaidErr != nil {
+			log.Printf("Warning: Plaid disabled (%v). Set PLAID_CLIENT_ID, PLAID_SECRET, PLAID_TOKEN_ENC_KEY to enable.", plaidErr)
+		} else {
+			plaidHandler = plaidpkg.NewPlaidHandler(plaidSvc, limiter)
+			log.Println("Plaid bank sync enabled.")
+		}
+	} else {
+		log.Println("Plaid bank sync disabled (env vars not set).")
+	}
 
 	// Create handlers
 	txHandler := handlers.NewTransactionHandler(txSvc)
@@ -217,7 +233,12 @@ func main() {
 
 		r.Mount("/transactions", txHandler.Routes())
 		r.Mount("/accounts", acctHandler.Routes())
-		r.Mount("/data", importExportHandler.Routes())
+		r.Route("/data", func(r chi.Router) {
+			r.Mount("/", importExportHandler.Routes())
+			if plaidHandler != nil {
+				r.Mount("/plaid", plaidHandler.Routes())
+			}
+		})
 		r.Mount("/snapshots", snapshotHandler.Routes())
 
 		// Books endpoint (user's book)

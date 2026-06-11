@@ -18,6 +18,9 @@ const (
 // is unavailable so that a Redis outage never hard-blocks auth flows.
 type Limiter struct {
 	rdb *redis.Client
+	// now is the clock used for window bucketing — injectable so tests can pin
+	// it and never flake across a minute boundary.
+	now func() time.Time
 }
 
 // New connects to the given Redis URL and returns a Limiter.
@@ -28,7 +31,7 @@ func New(redisURL string) (*Limiter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ratelimit: parse redis url: %w", err)
 	}
-	return &Limiter{rdb: redis.NewClient(opts)}, nil
+	return &Limiter{rdb: redis.NewClient(opts), now: time.Now}, nil
 }
 
 // AllowRegistration checks the global daily cap on new account creation (50/day).
@@ -38,7 +41,7 @@ func (l *Limiter) AllowRegistration(ctx context.Context) bool {
 	if l == nil {
 		return true
 	}
-	key := fmt.Sprintf("reg:daily:%s", time.Now().UTC().Format("2006-01-02"))
+	key := fmt.Sprintf("reg:daily:%s", l.now().UTC().Format("2006-01-02"))
 	count, err := l.rdb.Incr(ctx, key).Result()
 	if err != nil {
 		log.Printf("ratelimit: redis error on registration check: %v", err)
@@ -62,7 +65,7 @@ func (l *Limiter) AllowLogin(ctx context.Context, ip string) bool {
 		return true
 	}
 	// Key per IP per UTC minute — e.g. "login:ip:1.2.3.4:2026-04-15T14:32"
-	key := fmt.Sprintf("login:ip:%s:%s", ip, time.Now().UTC().Format("2006-01-02T15:04"))
+	key := fmt.Sprintf("login:ip:%s:%s", ip, l.now().UTC().Format("2006-01-02T15:04"))
 	count, err := l.rdb.Incr(ctx, key).Result()
 	if err != nil {
 		log.Printf("ratelimit: redis error on login check: %v", err)
@@ -102,4 +105,25 @@ func (l *Limiter) IsTokenRevoked(ctx context.Context, jti string) bool {
 		return false // fail open
 	}
 	return exists > 0
+}
+
+// AllowN checks a generic per-minute cap for an arbitrary key (e.g. a user id
+// scoped by endpoint name). Same semantics as the other checks: a 1-minute
+// UTC bucket, failing open on Redis errors and on a nil limiter.
+func (l *Limiter) AllowN(ctx context.Context, key string, perMinute int) bool {
+	if l == nil {
+		return true
+	}
+	k := fmt.Sprintf("rl:%s:%s", key, l.now().UTC().Format("2006-01-02T15:04"))
+	count, err := l.rdb.Incr(ctx, k).Result()
+	if err != nil {
+		log.Printf("ratelimit: redis error on %s: %v", key, err)
+		return true // fail open
+	}
+	if count == 1 {
+		if err := l.rdb.Expire(ctx, k, 2*time.Minute).Err(); err != nil {
+			log.Printf("ratelimit: redis expire error: %v", err)
+		}
+	}
+	return count <= int64(perMinute)
 }

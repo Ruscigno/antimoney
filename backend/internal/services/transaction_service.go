@@ -36,10 +36,14 @@ func NewTransactionService(pool *pgxpool.Pool) *TransactionService {
 
 // CreateTransactionRequest is the payload for creating a new transaction.
 type CreateTransactionRequest struct {
-	CustomID    string               `json:"custom_id"`
-	PostDate    time.Time            `json:"post_date"`
-	Description string               `json:"description"`
-	Splits      []CreateSplitRequest `json:"splits"`
+	CustomID    string    `json:"custom_id"`
+	PostDate    time.Time `json:"post_date"`
+	Description string    `json:"description"`
+	// Set programmatically only (e.g. the Plaid importer's dedupe key); never
+	// accepted from the public API body — a client could otherwise poison the
+	// plaid transaction_id dedupe keyspace or store unbounded JSONB.
+	Metadata json.RawMessage      `json:"-"`
+	Splits   []CreateSplitRequest `json:"splits"`
 }
 
 type CreateSplitRequest struct {
@@ -49,6 +53,10 @@ type CreateSplitRequest struct {
 	ValueDenom    int64  `json:"value_denom"`
 	QuantityNum   int64  `json:"quantity_num"`
 	QuantityDenom int64  `json:"quantity_denom"`
+	// Set programmatically only (e.g. by the Plaid importer); never accepted from
+	// the public API body, otherwise any user could POST reconcile_state:"y" and
+	// bypass the reconcile workflow. Empty → "n".
+	ReconcileState string `json:"-"`
 }
 
 // CreateTransaction creates a transaction with its splits as a single atomic operation.
@@ -149,11 +157,16 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	txGUID := uuid.New().String()
 	now := time.Now().UTC()
 
+	meta := req.Metadata
+	if len(meta) == 0 {
+		meta = json.RawMessage("{}")
+	}
+
 	err = tx.QueryRow(ctx,
 		`INSERT INTO transactions (guid, custom_id, book_guid, post_date, enter_date, description, metadata, version, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, 1, $8, $8)
 		 RETURNING guid`,
-		txGUID, req.CustomID, bookGUID, postDate, now, req.Description, json.RawMessage("{}"), now,
+		txGUID, req.CustomID, bookGUID, postDate, now, req.Description, meta, now,
 	).Scan(&txGUID)
 	if err != nil {
 		return nil, fmt.Errorf("insert transaction: %w", err)
@@ -163,24 +176,30 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 	resultSplits := make([]models.Split, len(req.Splits))
 	for i, sp := range req.Splits {
 		splitGUID := uuid.New().String()
+		rs := sp.ReconcileState
+		if rs == "" {
+			rs = "n"
+		}
 		_, err := tx.Exec(ctx,
-			`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom, quantity_num, quantity_denom, created_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom,
+			                     quantity_num, quantity_denom, reconcile_state, created_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			splitGUID, txGUID, sp.AccountGUID, sp.Memo,
-			sp.ValueNum, sp.ValueDenom, sp.QuantityNum, sp.QuantityDenom, now,
+			sp.ValueNum, sp.ValueDenom, sp.QuantityNum, sp.QuantityDenom, rs, now,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("insert split %d: %w", i, err)
 		}
 		resultSplits[i] = models.Split{
-			GUID:          splitGUID,
-			TxGUID:        txGUID,
-			AccountGUID:   sp.AccountGUID,
-			Memo:          sp.Memo,
-			ValueNum:      sp.ValueNum,
-			ValueDenom:    sp.ValueDenom,
-			QuantityNum:   sp.QuantityNum,
-			QuantityDenom: sp.QuantityDenom,
+			GUID:           splitGUID,
+			TxGUID:         txGUID,
+			AccountGUID:    sp.AccountGUID,
+			Memo:           sp.Memo,
+			ValueNum:       sp.ValueNum,
+			ValueDenom:     sp.ValueDenom,
+			QuantityNum:    sp.QuantityNum,
+			QuantityDenom:  sp.QuantityDenom,
+			ReconcileState: rs,
 		}
 	}
 
@@ -196,7 +215,7 @@ func (s *TransactionService) CreateTransaction(ctx context.Context, req CreateTr
 		PostDate:    postDate,
 		EnterDate:   now,
 		Description: req.Description,
-		Metadata:    json.RawMessage("{}"),
+		Metadata:    meta,
 		Version:     1,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -637,7 +656,7 @@ func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accoun
 			return nil, fmt.Errorf("invalid cursor_date for around: %w", err)
 		}
 		cursorTimestamp := time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 11, 0, 0, 0, time.UTC)
-		
+
 		var countBefore int
 		err = s.pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM splits s JOIN transactions t ON s.tx_guid = t.guid
@@ -647,7 +666,7 @@ func (s *TransactionService) GetAccountRegisterPaged(ctx context.Context, accoun
 		if err != nil {
 			return nil, fmt.Errorf("count before: %w", err)
 		}
-		
+
 		beforeCount := limit * 3 / 4
 		queryOffset = countBefore - beforeCount
 		if queryOffset < 0 {

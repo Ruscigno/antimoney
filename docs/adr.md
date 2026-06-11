@@ -97,3 +97,25 @@ A robust pipeline ensures that "improvements" don't break the accounting logic.
 | **Database** | SQL Storage | **Cloud SQL** | ~$9-10/mo for `db-f1-micro` |
 | **Tasks** | Scrubbing/STX | **Cloud Tasks** | Free for first 1M operations/mo |
 | **Secrets** | Keys/Configs | **Secret Manager** | $0.03 per active secret/mo |
+
+---
+
+## ADR-001 — Accepted float boundary at the Plaid SDK
+
+**Status:** Accepted (2026-06-10) · **Context:** PR #3 (Plaid bank sync), review round 5 item #6.
+
+The project rule is absolute: financial amounts never use floats (`gnc` rational engine).
+The Plaid Go SDK, however, deserializes transaction amounts as `float64` — the raw
+decimal string is not exposed without re-implementing the SDK's JSON decoding.
+
+**Decision:** accept a single, contained float boundary in
+`backend/internal/plaid/client.go` (`convertTxns`): `int64(math.Round(amount * 100))`,
+immediately converting to `gnc`-style integer cents (denom 100). Rationale:
+- IEEE-754 doubles represent every value with ≤15 significant digits distinctly; bank
+  amounts (≤2 decimals) round-trip exactly through `math.Round` at cent scale.
+- The float never crosses the package boundary: everything downstream is `(num, denom)`.
+- Re-implementing the SDK's decoding to extract raw decimal strings adds more risk than
+  the boundary it removes.
+
+**Revisit if:** Plaid's SDK exposes raw string amounts, or non-2-decimal currencies are
+added (see spec §13 — the fixed denom-100 would have to change anyway).

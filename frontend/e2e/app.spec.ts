@@ -392,3 +392,38 @@ test.describe.serial('Register search E2E', () => {
         await expect(page.locator('.register-table td.col-description', { hasText: 'Acme Salary Payment' })).toBeVisible();
     });
 });
+
+
+// ── Plaid (smoke) ────────────────────────────────────────────────────────
+// The full Link flow needs sandbox credentials and cannot run headless
+// (spec §10 keeps it a manual Sandbox checklist). This smoke test pins the
+// wiring: the section renders and, when the backend has no PLAID_* env
+// (routes unmounted), the UI degrades to a friendly error — never a crash.
+test.describe('Plaid smoke', () => {
+    test('Connect Bank section renders and degrades gracefully', async ({ page, request }) => {
+        const res = await request.post(`${BASE}/auth/register`, {
+            data: { email: `e2e-plaid-${Date.now()}@example.com`, password: 'Password1', name: 'E2E Plaid' },
+        });
+        const data = await res.json();
+        await page.addInitScript((token) => {
+            Object.defineProperty(window, 'localStorage', {
+                value: {
+                    getItem: (k: string) => (k === 'antimoney-token' ? token : null),
+                    setItem: () => { },
+                    removeItem: () => { },
+                },
+                writable: true,
+            });
+        }, data.token);
+
+        await page.goto(`${BASE}/data`);
+        const connectBtn = page.getByRole('button', { name: /Connect bank|Conectar banco/i });
+        await expect(connectBtn).toBeVisible();
+        await connectBtn.click();
+        // Either Plaid is configured (Link opens an iframe) or it is not
+        // (friendly error message) — both acceptable; a crash is not.
+        await expect(
+            page.locator('.message.error').or(page.locator('iframe[id^="plaid-link"]')),
+        ).toBeVisible({ timeout: 10000 });
+    });
+});

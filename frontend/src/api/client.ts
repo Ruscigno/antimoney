@@ -1,4 +1,4 @@
-import type { Account, Transaction, RegisterEntry, RegisterPage, CreateTransactionRequest, SnapshotConfig, SnapshotSummary } from '../types';
+import type { Account, Transaction, RegisterEntry, RegisterPage, CreateTransactionRequest, SnapshotConfig, SnapshotSummary, PlaidBankAccount, SyncResult, PlaidItem } from '../types';
 
 const API_BASE = '/api';
 
@@ -136,4 +136,57 @@ export const restoreSnapshot = (id: string) =>
 
 export const deleteSnapshot = (id: string) =>
     fetchJSON<void>(`/snapshots/${id}`, { method: 'DELETE' });
+
+// Plaid
+// language: the app locale — the backend whitelists it to a Plaid Link language.
+export const plaidGetLinkToken = (language: string) =>
+    fetchJSON<{ link_token: string }>('/data/plaid/link-token', {
+        method: 'POST',
+        body: JSON.stringify({ language }),
+    });
+
+export const plaidExchange = (publicToken: string) =>
+    fetchJSON<{ item_guid: string; institution_name: string; accounts: PlaidBankAccount[] }>(
+        '/data/plaid/exchange',
+        { method: 'POST', body: JSON.stringify({ public_token: publicToken }) },
+    );
+
+export const plaidLink = (itemGuid: string, mappings: { account_id: string; account_guid: string }[], importPending: boolean) =>
+    fetchJSON<{ message: string }>('/data/plaid/link', {
+        method: 'POST',
+        body: JSON.stringify({ item_guid: itemGuid, mappings, import_pending: importPending }),
+    });
+
+export const plaidSync = (itemGuid: string) =>
+    fetchJSON<SyncResult>('/data/plaid/sync', {
+        method: 'POST',
+        body: JSON.stringify({ item_guid: itemGuid }),
+    });
+
+// Only the staged transaction id and the chosen category cross the wire —
+// all financial data is resolved server-side from staging.
+export const plaidImport = (rows: {
+    transaction_id: string;
+    category_account_guid: string;
+}[]) =>
+    // failed lists transaction_ids the backend could not import; error is set
+    // when the batch was interrupted mid-way — callers must surface partial
+    // progress instead of reporting blanket success or blanket failure.
+    fetchJSON<{ imported: number; failed?: string[]; error?: string }>('/data/plaid/import', {
+        method: 'POST',
+        body: JSON.stringify({ rows }),
+    });
+
+// Permanently hide staged suggestions the user never wants to import.
+export const plaidDismiss = (transactionIds: string[]) =>
+    fetchJSON<{ dismissed: number }>('/data/plaid/dismiss', {
+        method: 'POST',
+        body: JSON.stringify({ transaction_ids: transactionIds }),
+    });
+
+export const plaidDisconnect = (itemGuid: string) =>
+    fetchJSON<void>(`/data/plaid/items/${itemGuid}`, { method: 'DELETE' });
+
+export const plaidListItems = () =>
+    fetchJSON<{ items: PlaidItem[] }>('/data/plaid/items', { method: 'GET' });
 

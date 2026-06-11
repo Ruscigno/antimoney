@@ -1,7 +1,9 @@
-import { useState, useRef, useEffect } from 'react';
-import { t } from '../i18n';
-import { getAccounts } from '../api/client';
-import type { Account } from '../types';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { usePlaidLink } from 'react-plaid-link';
+import { t, getLocale } from '../i18n';
+import { getAccounts, plaidGetLinkToken, plaidExchange, plaidLink, plaidListItems, plaidDisconnect, plaidSync } from '../api/client';
+import type { Account, PlaidBankAccount, PlaidItem, SyncSuggestion } from '../types';
+import ImportMatcher from '../components/ImportMatcher';
 
 export default function DataManagement() {
     const [accounts, setAccounts] = useState<Account[]>([]);
@@ -15,6 +17,67 @@ export default function DataManagement() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const csvInputRef = useRef<HTMLInputElement>(null);
     const gnucashInputRef = useRef<HTMLInputElement>(null);
+
+    const [linkToken, setLinkToken] = useState<string | null>(null);
+    const [plaidConnecting, setPlaidConnecting] = useState(false);
+    const [plaidStep, setPlaidStep] = useState<'idle' | 'linking' | 'mapping' | 'done'>('idle');
+    const [plaidItem, setPlaidItem] = useState<{ guid: string; institution: string } | null>(null);
+    const [plaidBankAccounts, setPlaidBankAccounts] = useState<PlaidBankAccount[]>([]);
+    const [plaidMappings, setPlaidMappings] = useState<Record<string, string>>({});
+    const [plaidImportPending, setPlaidImportPending] = useState(false);
+    const [plaidMessage, setPlaidMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [plaidItems, setPlaidItems] = useState<PlaidItem[]>([]);
+    const [syncingItemGuid, setSyncingItemGuid] = useState<string | null>(null);
+    const [dmSuggestions, setDmSuggestions] = useState<SyncSuggestion[] | null>(null);
+    const [dmInstitution, setDmInstitution] = useState('');
+
+    const loadPlaidItems = useCallback(() => {
+        plaidListItems().then(r => setPlaidItems(r.items)).catch(() => {});
+    }, []);
+
+    useEffect(() => { loadPlaidItems(); }, [loadPlaidItems]);
+
+    const handlePlaidSyncNow = async (item: PlaidItem) => {
+        setSyncingItemGuid(item.guid);
+        setPlaidMessage(null);
+        try {
+            const result = await plaidSync(item.guid);
+            const moreSuffix = (result.has_more ? ` ${t('plaid.syncMore')}` : '')
+                + (result.in_progress ? ` ${t('plaid.syncInProgress')}` : '');
+            if (result.count > 0) {
+                // Spec §6.2: report "<N> new transactions" AND open the matcher.
+                setPlaidMessage({
+                    type: 'success',
+                    text: t('plaid.syncSuccess').replace('{{count}}', String(result.count)) + moreSuffix,
+                });
+                setDmInstitution(item.institution_name);
+                setDmSuggestions(result.suggestions);
+            } else {
+                setPlaidMessage({ type: 'success', text: t('plaid.syncNone') + moreSuffix });
+            }
+            loadPlaidItems();
+        } catch (e) {
+            // The backend returns the literal "reconnect_required" for Plaid's
+            // ITEM_LOGIN_REQUIRED — map it to the re-auth guidance message.
+            const text = e instanceof Error && e.message === 'reconnect_required'
+                ? t('plaid.reconnectNeeded')
+                : t('plaid.syncError').replace('{{institution}}', item.institution_name);
+            setPlaidMessage({ type: 'error', text });
+        } finally {
+            setSyncingItemGuid(null);
+        }
+    };
+
+    const handlePlaidDisconnect = async (item: PlaidItem) => {
+        if (!window.confirm(t('plaid.disconnectConfirm'))) return;
+        try {
+            await plaidDisconnect(item.guid);
+            setPlaidMessage({ type: 'success', text: t('plaid.disconnected') });
+            loadPlaidItems();
+        } catch {
+            setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
+        }
+    };
 
     useEffect(() => {
         getAccounts().then(data => {
@@ -200,6 +263,69 @@ export default function DataManagement() {
         }
     };
 
+    const handleConnectBank = async () => {
+        setPlaidConnecting(true);
+        setPlaidMessage(null);
+        try {
+            const { link_token } = await plaidGetLinkToken(getLocale());
+            setLinkToken(link_token);
+            setPlaidStep('linking');
+        } catch {
+            // Backend errors are not localized — never render them raw.
+            setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
+        } finally {
+            setPlaidConnecting(false);
+        }
+    };
+
+    const { open: openPlaidLink, ready: plaidLinkReady } = usePlaidLink({
+        token: linkToken ?? '',
+        onSuccess: async (publicToken) => {
+            setPlaidConnecting(true);
+            setPlaidMessage(null);
+            try {
+                const result = await plaidExchange(publicToken);
+                setPlaidItem({ guid: result.item_guid, institution: result.institution_name });
+                setPlaidBankAccounts(result.accounts);
+                setPlaidMappings({});
+                setPlaidStep('mapping');
+            } catch {
+                setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
+                setPlaidStep('idle');
+            } finally {
+                setPlaidConnecting(false);
+            }
+        },
+        onExit: () => {
+            if (plaidStep === 'linking') setPlaidStep('idle');
+        },
+    });
+
+    useEffect(() => {
+        if (plaidStep === 'linking' && plaidLinkReady && linkToken) {
+            openPlaidLink();
+        }
+    }, [plaidStep, plaidLinkReady, linkToken, openPlaidLink]);
+
+    const handleSubmitMappings = async () => {
+        if (!plaidItem) return;
+        const mappings = Object.entries(plaidMappings)
+            .filter(([, v]) => v !== '')
+            .map(([account_id, account_guid]) => ({ account_id, account_guid }));
+        setPlaidConnecting(true);
+        setPlaidMessage(null);
+        try {
+            await plaidLink(plaidItem.guid, mappings, plaidImportPending);
+            setPlaidStep('done');
+            setPlaidMessage({ type: 'success', text: `${t('plaid.connected')}: ${plaidItem.institution}` });
+            loadPlaidItems();
+        } catch {
+            setPlaidMessage({ type: 'error', text: t('plaid.genericError') });
+        } finally {
+            setPlaidConnecting(false);
+        }
+    };
+
     return (
         <div className="data-management">
             <div className="page-header">
@@ -304,6 +430,107 @@ export default function DataManagement() {
                     </button>
                 </div>
             </div>
+
+            {/* ─── Connect Bank ───────────────────────────────────────────── */}
+            <section className="data-section" style={{ marginTop: 24 }}>
+                <h2>{t('plaid.connectBank')}</h2>
+
+                {plaidMessage && (
+                    <div className={`message ${plaidMessage.type}`}>{plaidMessage.text}</div>
+                )}
+
+                {plaidStep === 'idle' && (
+                    <button className="btn btn-primary" onClick={handleConnectBank} disabled={plaidConnecting}>
+                        {plaidConnecting ? t('plaid.connecting') : t('plaid.connectBank')}
+                    </button>
+                )}
+
+                {plaidStep === 'mapping' && plaidItem && (
+                    <div className="plaid-mapping">
+                        <p><strong>{plaidItem.institution}</strong> — {t('plaid.mapAccounts')}</p>
+                        <table>
+                            <tbody>
+                                {plaidBankAccounts.map(ba => (
+                                    <tr key={ba.account_id}>
+                                        <td>{ba.name} (…{ba.mask})</td>
+                                        <td>
+                                            <select
+                                                value={plaidMappings[ba.account_id] ?? ''}
+                                                onChange={e => setPlaidMappings(m => ({ ...m, [ba.account_id]: e.target.value }))}
+                                            >
+                                                <option value="">{t('plaid.noMapping')}</option>
+                                                {accounts.map(a => (
+                                                    <option key={a.guid} value={a.guid}>{a.name}</option>
+                                                ))}
+                                            </select>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                        <label>
+                            <input
+                                type="checkbox"
+                                checked={plaidImportPending}
+                                onChange={e => setPlaidImportPending(e.target.checked)}
+                            />
+                            {' '}{t('plaid.importPending')}
+                        </label>
+                        <div style={{ marginTop: '1rem' }}>
+                            <button className="btn btn-primary" onClick={handleSubmitMappings} disabled={plaidConnecting}>
+                                {plaidConnecting ? t('plaid.connecting') : t('plaid.save')}
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {plaidStep === 'done' && (
+                    <p>{t('plaid.connected')} ✓</p>
+                )}
+
+                {plaidItems.length > 0 && (
+                    <div className="plaid-items">
+                        <h3>{t('plaid.connectedBanks')}</h3>
+                        {plaidItems.map(item => (
+                            <div key={item.guid} className="plaid-item-row">
+                                <span>
+                                    <strong>{item.institution_name}</strong>
+                                    {' — '}
+                                    {item.last_synced_at
+                                        ? t('plaid.lastSynced').replace('{{date}}', new Date(item.last_synced_at).toLocaleString())
+                                        : t('plaid.neverSynced')}
+                                </span>
+                                <span className="plaid-item-actions">
+                                    <button
+                                        className="btn btn-secondary"
+                                        onClick={() => handlePlaidSyncNow(item)}
+                                        disabled={syncingItemGuid !== null}
+                                    >
+                                        {syncingItemGuid === item.guid
+                                            ? t('plaid.syncing').replace('{{institution}}', item.institution_name)
+                                            : t('plaid.syncNow')}
+                                    </button>
+                                    <button className="btn btn-danger" onClick={() => handlePlaidDisconnect(item)}>
+                                        {t('plaid.disconnect')}
+                                    </button>
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </section>
+
+            {dmSuggestions && (
+                <ImportMatcher
+                    institutionName={dmInstitution}
+                    suggestions={dmSuggestions}
+                    onClose={() => setDmSuggestions(null)}
+                    onImported={(count) => {
+                        setDmSuggestions(null);
+                        setPlaidMessage({ type: 'success', text: t('plaid.importSuccess').replace('{{count}}', String(count)) });
+                    }}
+                />
+            )}
         </div>
     );
 }

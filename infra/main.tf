@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    external = {
+      source  = "hashicorp/external"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -30,10 +34,82 @@ resource "google_project_service" "apis" {
     "compute.googleapis.com",
     "run.googleapis.com",
     "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com"
+    "cloudbuild.googleapis.com",
+    "secretmanager.googleapis.com"
   ])
   service            = each.key
   disable_on_destroy = false
+}
+
+# Plaid secrets live in Secret Manager, not as plaintext env vars: env vars are
+# readable by any principal with run.services.get and land verbatim in the
+# Terraform state. Terraform manages only the secret CONTAINERS and IAM; the
+# secret VALUES are added out-of-band so they never touch variables or state.
+#
+# BOOTSTRAP ORDER (Cloud Run validates `latest` at rollout, so wiring the env
+# before a version exists fails the deploy — hence the two flags):
+#   1. terraform apply -var enable_plaid=true            # creates containers + IAM only
+#   2. printf '%s' "$PLAID_SECRET"        | gcloud secrets versions add plaid-secret        --data-file=-
+#      printf '%s' "$PLAID_TOKEN_ENC_KEY" | gcloud secrets versions add plaid-token-enc-key --data-file=-
+#   3. terraform apply -var enable_plaid=true -var plaid_secrets_ready=true   # wires the env
+#
+# (JWT_SECRET / DATABASE_URL predate this PR and keep their existing pattern.)
+locals {
+  plaid_secret_ids = var.enable_plaid ? toset(["plaid-secret", "plaid-token-enc-key"]) : toset([])
+}
+
+resource "google_secret_manager_secret" "plaid" {
+  for_each  = local.plaid_secret_ids
+  secret_id = each.key
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.apis]
+}
+
+data "google_project" "current" {}
+
+# Validates bootstrap step 2 actually happened, METADATA-ONLY: the provider's
+# plural versions data source (no secret_data) requires google provider 6.x,
+# and the singular one would copy secret_data into the state — the exact leak
+# this design eliminates. gcloud (already required by deploy.sh) lists version
+# names only; nothing sensitive enters the state.
+# NOTE on timing: with a PENDING change on the secret resources (e.g. the very
+# first combined apply) Terraform defers this read to apply time — the
+# precondition still fires before any broken Cloud Run rollout, just later
+# than plan. In steady state it evaluates at plan.
+data "external" "plaid_secret_has_version" {
+  for_each = var.plaid_secrets_ready ? google_secret_manager_secret.plaid : {}
+  program = ["bash", "-c", <<-EOT
+    # A gcloud failure (missing binary, no auth, wrong project) must surface
+    # as ITS OWN error — never be conflated with "no version yet". The streams
+    # are captured SEPARATELY: version detection reads only stdout (the version
+    # list); stderr is reserved for the failure message — gcloud routinely
+    # prints benign warnings to stderr with exit 0, and folding them into the
+    # check would fabricate a false has_version=true.
+    errf=$(mktemp)
+    if ! out=$(gcloud secrets versions list ${each.value.secret_id} --project ${var.project_id} --filter='state=ENABLED' --format='value(name)' --limit=1 2>"$errf"); then
+      echo "gcloud could not list versions of ${each.value.secret_id}: $(cat "$errf")" >&2
+      rm -f "$errf"
+      exit 1
+    fi
+    rm -f "$errf"
+    if [ -n "$out" ]; then
+      echo '{"has_version":"true"}'
+    else
+      echo '{"has_version":"false"}'
+    fi
+  EOT
+  ]
+  depends_on = [google_secret_manager_secret.plaid]
+}
+
+# The backend's Cloud Run runtime SA must be able to read the secrets.
+resource "google_secret_manager_secret_iam_member" "plaid_accessor" {
+  for_each  = google_secret_manager_secret.plaid
+  secret_id = each.value.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${data.google_project.current.number}-compute@developer.gserviceaccount.com"
 }
 
 # 2. Firewall rule to allow internal traffic to Postgres port 5432
@@ -183,6 +259,29 @@ resource "google_cloud_run_v2_service" "backend" {
         name  = "CORS_ALLOWED_ORIGINS"
         value = var.cors_allowed_origins
       }
+      env {
+        name  = "PLAID_CLIENT_ID"
+        value = var.plaid_client_id # an identifier, not a secret
+      }
+      env {
+        name  = "PLAID_ENV"
+        value = var.plaid_env
+      }
+      dynamic "env" {
+        # Gated on plaid_secrets_ready: Cloud Run validates `latest` at rollout,
+        # so the env must only be wired after the versions exist (bootstrap
+        # step 3 — see the comment at the secret resources).
+        for_each = var.plaid_secrets_ready ? google_secret_manager_secret.plaid : {}
+        content {
+          name = env.key == "plaid-secret" ? "PLAID_SECRET" : "PLAID_TOKEN_ENC_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = env.value.secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
     }
 
     # Connect Cloud Run to the default VPC so it can reach the DB VM's internal IP
@@ -199,9 +298,24 @@ resource "google_cloud_run_v2_service" "backend" {
     ignore_changes = [
       template[0].containers[0].image, # Ignore image changes so deployments outside TF don't get reverted
     ]
+    # Bootstrap-order guards (round-12 #4): catch misuse before any broken
+    # Cloud Run rollout — at plan time in steady state, deferred to apply time
+    # when the secret resources have pending changes (see the data source note).
+    precondition {
+      condition     = !var.plaid_secrets_ready || var.enable_plaid
+      error_message = "plaid_secrets_ready=true requires enable_plaid=true (the secrets must exist before they can be wired)."
+    }
+    precondition {
+      condition = alltrue([
+        for k, v in data.external.plaid_secret_has_version : v.result.has_version == "true"
+      ])
+      error_message = "plaid_secrets_ready=true but a Plaid secret has no ENABLED version yet — run bootstrap step 2 (gcloud secrets versions add) first."
+    }
   }
 
-  depends_on = [google_project_service.apis]
+  # The IAM grant (and the secrets it references) must exist before a revision
+  # that mounts them rolls out, or the deploy fails validation.
+  depends_on = [google_project_service.apis, google_secret_manager_secret_iam_member.plaid_accessor]
 }
 
 resource "google_cloud_run_service_iam_member" "backend_public" {
