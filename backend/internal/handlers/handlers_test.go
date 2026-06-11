@@ -187,7 +187,16 @@ func TestHandlers(t *testing.T) {
 	importReq.Header.Set("Authorization", "Bearer "+res.Token)
 	importReq.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, _ = client.Do(importReq)
+	// The 3.6 MB fixture inserts thousands of rows; on a slow runner that can
+	// exceed the suite's default 5s client timeout — the client cancels first
+	// ("context canceled" server-side) and Do returns (nil, err). Use a client
+	// that outlives the server's own 30s middleware timeout, and never
+	// dereference resp without checking the error (issue #5's panic).
+	importClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err = importClient.Do(importReq)
+	if err != nil {
+		t.Fatalf("POST /data/import request failed: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /data/import failed: %d", resp.StatusCode)
 	}
