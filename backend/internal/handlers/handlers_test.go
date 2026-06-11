@@ -187,7 +187,10 @@ func TestHandlers(t *testing.T) {
 	importReq.Header.Set("Authorization", "Bearer "+res.Token)
 	importReq.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, _ = client.Do(importReq)
+	resp, err = client.Do(importReq)
+	if err != nil {
+		t.Fatalf("POST /data/import request failed: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /data/import failed: %d", resp.StatusCode)
 	}

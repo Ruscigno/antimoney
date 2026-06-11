@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/user/antimoney/internal/auth"
 	"github.com/user/antimoney/internal/seed"
@@ -149,31 +150,36 @@ func performImport(ctx context.Context, pool *pgxpool.Pool, bookGUID string, dat
 		return fmt.Errorf("failed to clean up accounts: %w", err)
 	}
 
+	// Statements are queued into pgx batches (one network round-trip per batch)
+	// instead of one Exec round-trip per row: a full-book import is thousands of
+	// rows, and per-row round-trips made it slower than the request timeouts.
 	var rootAccountGUID string
 	// Pass 1: Insert accounts without parent_guid to avoid FK issues.
+	accountBatch := &pgx.Batch{}
 	for _, acc := range data.Accounts {
 		if acc.AccountType == "ROOT" {
 			rootAccountGUID = acc.GUID
 		}
-		if _, err = tx.Exec(ctx,
+		accountBatch.Queue(
 			`INSERT INTO accounts (guid, name, account_type, parent_guid, book_guid, placeholder, description)
 			 VALUES ($1, $2, $3, NULL, $4, $5, $6)`,
-			acc.GUID, acc.Name, acc.AccountType, bookGUID, acc.Placeholder, acc.Description); err != nil {
-			log.Printf("Error inserting account (pass 1): %v", err)
-			return fmt.Errorf("failed to insert account: %w", err)
-		}
+			acc.GUID, acc.Name, acc.AccountType, bookGUID, acc.Placeholder, acc.Description)
+	}
+	if err := execImportBatch(ctx, tx, accountBatch, "insert account"); err != nil {
+		return err
 	}
 
 	// Pass 2: Update accounts with their parent_guid.
+	parentBatch := &pgx.Batch{}
 	for _, acc := range data.Accounts {
 		if acc.ParentGUID != nil {
-			if _, err = tx.Exec(ctx,
+			parentBatch.Queue(
 				`UPDATE accounts SET parent_guid = $1 WHERE guid = $2 AND book_guid = $3`,
-				acc.ParentGUID, acc.GUID, bookGUID); err != nil {
-				log.Printf("Error updating account parent (pass 2): %v", err)
-				return fmt.Errorf("failed to update account hierarchy: %w", err)
-			}
+				acc.ParentGUID, acc.GUID, bookGUID)
 		}
+	}
+	if err := execImportBatch(ctx, tx, parentBatch, "update account hierarchy"); err != nil {
+		return err
 	}
 
 	if rootAccountGUID != "" {
@@ -183,30 +189,51 @@ func performImport(ctx context.Context, pool *pgxpool.Pool, bookGUID string, dat
 		}
 	}
 
+	// All transactions are inserted before any split so the tx_guid FK is
+	// always satisfied, regardless of batch boundaries.
+	txnBatch := &pgx.Batch{}
+	splitBatch := &pgx.Batch{}
 	for _, t := range data.Transactions {
-		if _, err = tx.Exec(ctx,
+		txnBatch.Queue(
 			`INSERT INTO transactions (guid, book_guid, post_date, enter_date, description)
 			 VALUES ($1, $2, $3, $4, $5)`,
-			t.GUID, bookGUID, t.PostDate, t.EnterDate, t.Description); err != nil {
-			log.Printf("Error inserting transaction: %v", err)
-			return fmt.Errorf("failed to insert transaction: %w", err)
-		}
-
+			t.GUID, bookGUID, t.PostDate, t.EnterDate, t.Description)
 		for _, s := range t.Splits {
-			if _, err = tx.Exec(ctx,
+			splitBatch.Queue(
 				`INSERT INTO splits (guid, tx_guid, account_guid, memo, value_num, value_denom, quantity_num, quantity_denom, reconcile_state)
 				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-				s.GUID, t.GUID, s.AccountGUID, s.Memo, s.ValueNum, s.ValueDenom, s.QuantityNum, s.QuantityDenom, s.ReconcileState); err != nil {
-				log.Printf("Error inserting split: %v", err)
-				return fmt.Errorf("failed to insert split: %w", err)
-			}
+				s.GUID, t.GUID, s.AccountGUID, s.Memo, s.ValueNum, s.ValueDenom, s.QuantityNum, s.QuantityDenom, s.ReconcileState)
 		}
+	}
+	if err := execImportBatch(ctx, tx, txnBatch, "insert transaction"); err != nil {
+		return err
+	}
+	if err := execImportBatch(ctx, tx, splitBatch, "insert split"); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	return nil
+}
+
+// execImportBatch sends every queued statement in a single round-trip and
+// surfaces the first failure under the given label, matching the error
+// shape of the per-row Execs it replaced.
+func execImportBatch(ctx context.Context, tx pgx.Tx, batch *pgx.Batch, label string) error {
+	if batch.Len() == 0 {
+		return nil
+	}
+	br := tx.SendBatch(ctx, batch)
+	for i := 0; i < batch.Len(); i++ {
+		if _, err := br.Exec(); err != nil {
+			br.Close()
+			log.Printf("Error during import (%s): %v", label, err)
+			return fmt.Errorf("failed to %s: %w", label, err)
+		}
+	}
+	return br.Close()
 }
 
 func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Request) {
