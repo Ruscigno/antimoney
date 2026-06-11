@@ -82,12 +82,18 @@ data "external" "plaid_secret_has_version" {
   for_each = var.plaid_secrets_ready ? google_secret_manager_secret.plaid : {}
   program = ["bash", "-c", <<-EOT
     # A gcloud failure (missing binary, no auth, wrong project) must surface
-    # as ITS OWN error — never be conflated with "no version yet". A non-zero
-    # exit here fails the data source with stderr as the message.
-    if ! out=$(gcloud secrets versions list ${each.value.secret_id} --project ${var.project_id} --filter='state=ENABLED' --format='value(name)' --limit=1 2>&1); then
-      echo "gcloud could not list versions of ${each.value.secret_id}: $out" >&2
+    # as ITS OWN error — never be conflated with "no version yet". The streams
+    # are captured SEPARATELY: version detection reads only stdout (the version
+    # list); stderr is reserved for the failure message — gcloud routinely
+    # prints benign warnings to stderr with exit 0, and folding them into the
+    # check would fabricate a false has_version=true.
+    errf=$(mktemp)
+    if ! out=$(gcloud secrets versions list ${each.value.secret_id} --project ${var.project_id} --filter='state=ENABLED' --format='value(name)' --limit=1 2>"$errf"); then
+      echo "gcloud could not list versions of ${each.value.secret_id}: $(cat "$errf")" >&2
+      rm -f "$errf"
       exit 1
     fi
+    rm -f "$errf"
     if [ -n "$out" ]; then
       echo '{"has_version":"true"}'
     else
