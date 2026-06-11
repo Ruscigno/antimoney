@@ -266,6 +266,9 @@ func (h *PlaidHandler) handleDisconnect(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		if errors.Is(err, ErrConcurrentModification) {
+			// Telemetry: contention here means disconnects racing re-links —
+			// worth seeing in logs even though the client just retries.
+			log.Printf("plaid disconnect: concurrent modification on item %s; client told to retry", itemGUID)
 			handlers.WriteErrorPublic(w, http.StatusConflict, "conflict_retry")
 			return
 		}

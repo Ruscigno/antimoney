@@ -4,6 +4,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    external = {
+      source  = "hashicorp/external"
+      version = "~> 2.0"
+    }
   }
 }
 
@@ -70,10 +74,21 @@ data "google_project" "current" {}
 # and the singular one would copy secret_data into the state — the exact leak
 # this design eliminates. gcloud (already required by deploy.sh) lists version
 # names only; nothing sensitive enters the state.
+# NOTE on timing: with a PENDING change on the secret resources (e.g. the very
+# first combined apply) Terraform defers this read to apply time — the
+# precondition still fires before any broken Cloud Run rollout, just later
+# than plan. In steady state it evaluates at plan.
 data "external" "plaid_secret_has_version" {
   for_each = var.plaid_secrets_ready ? google_secret_manager_secret.plaid : {}
   program = ["bash", "-c", <<-EOT
-    if gcloud secrets versions list ${each.value.secret_id} --project ${var.project_id} --filter='state=ENABLED' --format='value(name)' --limit=1 2>/dev/null | grep -q .; then
+    # A gcloud failure (missing binary, no auth, wrong project) must surface
+    # as ITS OWN error — never be conflated with "no version yet". A non-zero
+    # exit here fails the data source with stderr as the message.
+    if ! out=$(gcloud secrets versions list ${each.value.secret_id} --project ${var.project_id} --filter='state=ENABLED' --format='value(name)' --limit=1 2>&1); then
+      echo "gcloud could not list versions of ${each.value.secret_id}: $out" >&2
+      exit 1
+    fi
+    if [ -n "$out" ]; then
       echo '{"has_version":"true"}'
     else
       echo '{"has_version":"false"}'
@@ -277,8 +292,9 @@ resource "google_cloud_run_v2_service" "backend" {
     ignore_changes = [
       template[0].containers[0].image, # Ignore image changes so deployments outside TF don't get reverted
     ]
-    # Bootstrap-order guards (round-12 #4): catch misuse at plan time instead
-    # of failing the Cloud Run rollout.
+    # Bootstrap-order guards (round-12 #4): catch misuse before any broken
+    # Cloud Run rollout — at plan time in steady state, deferred to apply time
+    # when the secret resources have pending changes (see the data source note).
     precondition {
       condition     = !var.plaid_secrets_ready || var.enable_plaid
       error_message = "plaid_secrets_ready=true requires enable_plaid=true (the secrets must exist before they can be wired)."

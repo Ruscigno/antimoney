@@ -827,9 +827,11 @@ func TestPlaidPendingPostedRace(t *testing.T) {
 		t.Fatalf("import of race-staged posted txn must be a benign skip, got %d / %v", imp.Imported, imp.Failed)
 	}
 	var txCount int
-	db.Pool.QueryRow(context.Background(),
+	if err := db.Pool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM transactions WHERE book_guid = $1 AND metadata->'plaid'->>'transaction_id' IN ('txn-P','txn-Q')`,
-		bookGUID).Scan(&txCount)
+		bookGUID).Scan(&txCount); err != nil {
+		t.Fatal(err)
+	}
 	if txCount != 1 {
 		t.Fatalf("expected exactly 1 transaction (no pending→posted duplicate), got %d", txCount)
 	}
@@ -1065,16 +1067,20 @@ func TestPlaidDisconnectForcedWhenTokenUndecryptable(t *testing.T) {
 		t.Fatalf("RemoveItem must not be attempted with an undecryptable token, called %d times", fake.removeCalls)
 	}
 	var cnt int
-	db.Pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, ex.ItemGUID).Scan(&cnt)
+	if err := db.Pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, ex.ItemGUID).Scan(&cnt); err != nil {
+		t.Fatal(err)
+	}
 	if cnt != 0 {
 		t.Fatalf("row must be deleted on forced disconnect, %d remain", cnt)
 	}
 	// Round-10 #1: the row must be ARCHIVED before deletion so a key
 	// misconfiguration stays recoverable by an operator.
 	var archived int
-	db.Pool.QueryRow(context.Background(),
+	if err := db.Pool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM plaid_migration_audit
-		 WHERE migration = 'force-disconnect' AND payload->>'guid' = $1`, ex.ItemGUID).Scan(&archived)
+		 WHERE migration = 'force-disconnect' AND payload->>'guid' = $1`, ex.ItemGUID).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
 	if archived != 1 {
 		t.Fatalf("forced disconnect must archive the row to plaid_migration_audit, found %d", archived)
 	}
@@ -1144,13 +1150,17 @@ func TestPlaidLegacyTokenDisconnectAborts(t *testing.T) {
 		t.Fatalf("RemoveItem must not run on a legacy token with the flag off")
 	}
 	var cnt int
-	db.Pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, itemGUID).Scan(&cnt)
+	if err := db.Pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM plaid_items WHERE guid = $1`, itemGUID).Scan(&cnt); err != nil {
+		t.Fatal(err)
+	}
 	if cnt != 1 {
 		t.Fatalf("recoverable legacy row must be PRESERVED, got %d rows", cnt)
 	}
 	var archived int
-	db.Pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM plaid_migration_audit WHERE migration = 'force-disconnect'`).Scan(&archived)
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_migration_audit WHERE migration = 'force-disconnect'`).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
 	if archived != 0 {
 		t.Fatalf("legacy token must not be force-archived, found %d audit rows", archived)
 	}
@@ -1177,9 +1187,11 @@ func TestPlaidModifiedToZeroDropsStaleStagedRow(t *testing.T) {
 		t.Fatalf("zeroed txn must drop the stale $5 suggestion, got %+v", second.Suggestions)
 	}
 	var staged int
-	db.Pool.QueryRow(context.Background(),
+	if err := db.Pool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = 'txn-Z'`,
-		bookGUID).Scan(&staged)
+		bookGUID).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
 	if staged != 0 {
 		t.Fatalf("stale staged row must be deleted, %d remain", staged)
 	}
@@ -1229,9 +1241,11 @@ func TestPlaidZeroSettleInSamePage(t *testing.T) {
 		t.Fatalf("in-page $0 settle must suppress the pending suggestion regardless of ordering, got %+v", res.Suggestions)
 	}
 	var staged int
-	db.Pool.QueryRow(context.Background(),
+	if err := db.Pool.QueryRow(context.Background(),
 		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1 AND transaction_id = 'txn-P'`,
-		bookGUID).Scan(&staged)
+		bookGUID).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
 	if staged != 0 {
 		t.Fatalf("in-page pending must be cleaned by the zero pass, %d remain", staged)
 	}
@@ -1321,8 +1335,10 @@ func TestPlaidZeroAmountSkipped(t *testing.T) {
 		t.Fatalf("zero-amount txn must not be suggested, got %d", res.Count)
 	}
 	var staged int
-	db.Pool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1`, bookGUID).Scan(&staged)
+	if err := db.Pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM plaid_staged_transactions WHERE book_guid = $1`, bookGUID).Scan(&staged); err != nil {
+		t.Fatal(err)
+	}
 	if staged != 0 {
 		t.Fatalf("zero-amount txn must not be staged, got %d rows", staged)
 	}
