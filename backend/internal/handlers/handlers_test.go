@@ -187,7 +187,12 @@ func TestHandlers(t *testing.T) {
 	importReq.Header.Set("Authorization", "Bearer "+res.Token)
 	importReq.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err = client.Do(importReq)
+	// The import is the one bulk request in this suite. Its client timeout sits
+	// just above the server's 30s middleware cap so that on a slow runner a
+	// pathologically slow import surfaces as the server's own 504 (what
+	// production would return), never as a client-side abort with a nil resp.
+	importClient := &http.Client{Timeout: 35 * time.Second}
+	resp, err = importClient.Do(importReq)
 	if err != nil {
 		t.Fatalf("POST /data/import request failed: %v", err)
 	}
