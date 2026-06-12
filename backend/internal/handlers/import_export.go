@@ -153,6 +153,9 @@ func performImport(ctx context.Context, pool *pgxpool.Pool, bookGUID string, dat
 	// Statements are queued into pgx batches (one network round-trip per batch)
 	// instead of one Exec round-trip per row: a full-book import is thousands of
 	// rows, and per-row round-trips made it slower than the request timeouts.
+	// (The old per-row logs carried an explicit pass-1/pass-2 marker; the batch
+	// labels keep that distinction — "insert account" IS pass 1 and "update
+	// account hierarchy" IS pass 2.)
 	var rootAccountGUID string
 	// Pass 1: Insert accounts without parent_guid to avoid FK issues.
 	accountBatch := &pgx.Batch{}
@@ -233,7 +236,13 @@ func execImportBatch(ctx context.Context, tx pgx.Tx, batch *pgx.Batch, label str
 			return fmt.Errorf("failed to %s: %w", label, err)
 		}
 	}
-	return br.Close()
+	// Close flushes the batch; a failure here is still a failure of THIS batch
+	// and must carry the same label every other error path has.
+	if err := br.Close(); err != nil {
+		log.Printf("Error during import (%s, batch close): %v", label, err)
+		return fmt.Errorf("failed to %s: %w", label, err)
+	}
+	return nil
 }
 
 func (h *ImportExportHandler) handleImport(w http.ResponseWriter, r *http.Request) {
