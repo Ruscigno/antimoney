@@ -20,7 +20,7 @@ type SnapshotConfig struct {
 	ID             string    `json:"id"`
 	BookGUID       string    `json:"book_guid"`
 	FrequencyHours int       `json:"frequency_hours"` // 0 = disabled
-	TTLHours       int       `json:"ttl_hours"`        // 0 = keep forever
+	TTLHours       int       `json:"ttl_hours"`       // 0 = keep forever
 	ActiveMode     bool      `json:"active_mode"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
@@ -162,4 +162,3 @@ type RegisterPage struct {
 	LastOffset  int             `json:"last_offset"`
 	TotalCount  int             `json:"total_count"`
 }
-

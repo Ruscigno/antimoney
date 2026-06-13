@@ -35,19 +35,19 @@ type GncSlot struct {
 
 type GncTransaction struct {
 	ID          string     `xml:"id"`
-	DatePosted  string    `xml:"date-posted>date"`
-	DateEntered string    `xml:"date-entered>date"`
+	DatePosted  string     `xml:"date-posted>date"`
+	DateEntered string     `xml:"date-entered>date"`
 	Description string     `xml:"description"`
 	Splits      []GncSplit `xml:"splits>split"`
 }
 
 type GncSplit struct {
-	ID             string `xml:"id"`
-	Memo           string `xml:"memo"`
+	ID              string `xml:"id"`
+	Memo            string `xml:"memo"`
 	ReconciledState string `xml:"reconciled-state"`
-	Value          string `xml:"value"`
-	Quantity       string `xml:"quantity"`
-	Account        string `xml:"account"`
+	Value           string `xml:"value"`
+	Quantity        string `xml:"quantity"`
+	Account         string `xml:"account"`
 }
 
 func parseFraction(val string) (num int64, denom int64, err error) {
@@ -91,7 +91,7 @@ func ParseGnuCash(r io.Reader) (*ExportData, error) {
 	}
 
 	exportData := &ExportData{}
-	
+
 	for _, acc := range data.Book.Accounts {
 		placeholder := false
 		for _, slot := range acc.Slots {
