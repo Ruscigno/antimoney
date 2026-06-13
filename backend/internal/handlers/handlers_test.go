@@ -232,6 +232,7 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 	}
 
 	txSvc := services.NewTransactionService(db.Pool)
+	acctSvc := services.NewAccountService(db.Pool)
 	snapshotSvc := services.NewSnapshotService(db.Pool)
 	importHandler := handlers.NewImportExportHandler(db.Pool, txSvc, snapshotSvc)
 
@@ -242,6 +243,31 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Seed a pre-existing transaction with balanced splits. Without this, the
+	// import's destructive `DELETE FROM transactions/splits` has nothing to
+	// delete and the rollback assertions below would be a tautological 0 == 0.
+	// With it, the failed import deletes these rows inside its transaction and
+	// the rollback must bring them back.
+	ctxBook := context.WithValue(ctx, auth.BookGUIDKey, res.BookGUID)
+	asset, err := acctSvc.CreateAccount(ctxBook, services.CreateAccountRequest{Name: "Seed Asset", AccountType: "ASSET"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expense, err := acctSvc.CreateAccount(ctxBook, services.CreateAccountRequest{Name: "Seed Expense", AccountType: "EXPENSE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txSvc.CreateTransaction(ctxBook, services.CreateTransactionRequest{
+		PostDate:    time.Now(),
+		Description: "Seed txn",
+		Splits: []services.CreateSplitRequest{
+			{AccountGUID: asset.GUID, ValueNum: -1500, ValueDenom: 100, QuantityNum: -1500, QuantityDenom: 100},
+			{AccountGUID: expense.GUID, ValueNum: 1500, ValueDenom: 100, QuantityNum: 1500, QuantityDenom: 100},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Baseline snapshot of everything performImport touches inside its single
 	// transaction: account count, the book's root pointer (NULLed and re-set
@@ -285,8 +311,10 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 	rootBefore := rootGUID()
 	txnsBefore := countTxns()
 	splitsBefore := countSplits()
-	if accountsBefore == 0 {
-		t.Fatal("expected a seeded chart of accounts")
+	// Guard the assertions' own validity: if these baselines are ever zero the
+	// rollback checks below would pass tautologically, so fail loudly instead.
+	if accountsBefore == 0 || txnsBefore == 0 || splitsBefore == 0 {
+		t.Fatalf("baseline must be non-empty for the rollback assertions to mean anything: accounts=%d txns=%d splits=%d", accountsBefore, txnsBefore, splitsBefore)
 	}
 
 	// Malformed import: the split references an account guid that the payload
@@ -324,7 +352,10 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 	// Pin the SPLIT-batch error specifically: a future 500 from an earlier step
 	// (cleanup DELETE, accounts batch) must not keep this test green while the
 	// path it claims to cover goes unexercised.
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading the 500 response body: %v", err)
+	}
 	if !bytes.Contains(body, []byte("failed to insert split")) {
 		t.Fatalf("expected the split-batch error in the body, got: %s", body)
 	}
