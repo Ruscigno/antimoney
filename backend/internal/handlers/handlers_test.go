@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -233,29 +234,18 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 	txSvc := services.NewTransactionService(db.Pool)
 	snapshotSvc := services.NewSnapshotService(db.Pool)
 	importHandler := handlers.NewImportExportHandler(db.Pool, txSvc, snapshotSvc)
-	acctSvc := services.NewAccountService(db.Pool)
-	acctHandler := handlers.NewAccountHandler(acctSvc, txSvc)
 
 	r := chi.NewRouter()
 	r.Use(auth.RequireAuth)
 	r.Mount("/data", importHandler.Routes())
-	r.Mount("/accounts", acctHandler.Routes())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	authedJSON := func(method, path string, body []byte, contentType string) *http.Response {
-		req, _ := http.NewRequest(method, ts.URL+path, bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+res.Token)
-		req.Header.Set("Content-Type", contentType)
-		resp, err := client.Do(req)
-		if err != nil {
-			t.Fatalf("%s %s failed: %v", method, path, err)
-		}
-		return resp
-	}
 
-	// Baseline: the registration seeded a chart of accounts.
+	// Baseline snapshot of everything performImport touches inside its single
+	// transaction: account count, the book's root pointer (NULLed and re-set
+	// mid-import), and the transaction/split counts.
 	countAccounts := func() int {
 		var n int
 		if err := db.Pool.QueryRow(ctx,
@@ -264,13 +254,45 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 		}
 		return n
 	}
-	before := countAccounts()
-	if before == 0 {
+	rootGUID := func() string {
+		var g *string
+		if err := db.Pool.QueryRow(ctx,
+			`SELECT root_account_guid FROM books WHERE guid = $1`, res.BookGUID).Scan(&g); err != nil {
+			t.Fatal(err)
+		}
+		if g == nil {
+			return ""
+		}
+		return *g
+	}
+	countTxns := func() int {
+		var n int
+		if err := db.Pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM transactions WHERE book_guid = $1`, res.BookGUID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	countSplits := func() int {
+		var n int
+		if err := db.Pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM splits s JOIN transactions t ON t.guid = s.tx_guid WHERE t.book_guid = $1`, res.BookGUID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	accountsBefore := countAccounts()
+	rootBefore := rootGUID()
+	txnsBefore := countTxns()
+	splitsBefore := countSplits()
+	if accountsBefore == 0 {
 		t.Fatal("expected a seeded chart of accounts")
 	}
 
 	// Malformed import: the split references an account guid that the payload
-	// never defines → FK violation inside the "insert split" batch.
+	// never defines → FK violation inside the "insert split" batch. The ROOT
+	// account also re-points books.root_account_guid mid-transaction, so a
+	// correct rollback must restore the original pointer too.
 	payload := `{
 		"accounts": [
 			{"guid": "11111111-1111-1111-1111-111111111111", "name": "Root", "account_type": "ROOT", "parent_guid": null, "placeholder": true, "description": ""}
@@ -288,15 +310,39 @@ func TestImportFailureRollsBackAtomically(t *testing.T) {
 	part.Write([]byte(payload))
 	writer.Close()
 
-	resp := authedJSON("POST", "/data/import", bodyBuf.Bytes(), writer.FormDataContentType())
+	req, _ := http.NewRequest("POST", ts.URL+"/data/import", bytes.NewReader(bodyBuf.Bytes()))
+	req.Header.Set("Authorization", "Bearer "+res.Token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /data/import failed: %v", err)
+	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("failing import: got %d, want 500", resp.StatusCode)
 	}
+	// Pin the SPLIT-batch error specifically: a future 500 from an earlier step
+	// (cleanup DELETE, accounts batch) must not keep this test green while the
+	// path it claims to cover goes unexercised.
+	body, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(body, []byte("failed to insert split")) {
+		t.Fatalf("expected the split-batch error in the body, got: %s", body)
+	}
 
-	// Atomicity: the import's cleanup DELETEs ran in the same transaction as
-	// the failing batch — a rollback must leave the original chart intact.
-	if after := countAccounts(); after != before {
-		t.Fatalf("failed import must roll back integrally: %d accounts before, %d after", before, after)
+	// Atomicity: every write performImport made — the destructive cleanup
+	// DELETEs, the book root re-point, the transaction, and the split — ran in
+	// one transaction; the rollback must leave all of it exactly as before.
+	if after := countAccounts(); after != accountsBefore {
+		t.Fatalf("accounts not rolled back: %d before, %d after", accountsBefore, after)
+	}
+	if after := rootGUID(); after != rootBefore {
+		t.Fatalf("books.root_account_guid not rolled back: %q before, %q after", rootBefore, after)
+	}
+	if after := countTxns(); after != txnsBefore {
+		t.Fatalf("transactions not rolled back: %d before, %d after", txnsBefore, after)
+	}
+	if after := countSplits(); after != splitsBefore {
+		t.Fatalf("splits not rolled back: %d before, %d after", splitsBefore, after)
 	}
 }
 
@@ -321,18 +367,17 @@ func TestCSVImportSmoke(t *testing.T) {
 	acctSvc := services.NewAccountService(db.Pool)
 	snapshotSvc := services.NewSnapshotService(db.Pool)
 	importHandler := handlers.NewImportExportHandler(db.Pool, txSvc, snapshotSvc)
-	acctHandler := handlers.NewAccountHandler(acctSvc, txSvc)
 
 	r := chi.NewRouter()
 	r.Use(auth.RequireAuth)
 	r.Mount("/data", importHandler.Routes())
-	r.Mount("/accounts", acctHandler.Routes())
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
-	// Target account for the CSV rows.
+	// Target account for the CSV rows (created directly via the service, not
+	// over HTTP — only the CSV import path is under test here).
 	ctxBook := context.WithValue(ctx, auth.BookGUIDKey, res.BookGUID)
 	bank, err := acctSvc.CreateAccount(ctxBook, services.CreateAccountRequest{Name: "CSV Chequing", AccountType: "BANK"})
 	if err != nil {
@@ -354,6 +399,7 @@ func TestCSVImportSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST /data/import/csv failed: %v", err)
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("CSV import: got %d, want 200", resp.StatusCode)
 	}
