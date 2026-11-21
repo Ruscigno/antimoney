@@ -147,6 +147,18 @@ resource "google_compute_instance" "db_instance" {
     network = "default"
     # Ephemeral external IP required to download packages during startup
     access_config {}
+
+    # External IPv6 (free tier) gives the VM outbound internet after the
+    # ephemeral IPv4 is removed by deploy.sh: apt, WordPress updates and the
+    # Cloudflare Tunnel used by segueretotodavida.com.br (see CLAUDE.md,
+    # "Shared VM"). Requires the `default` subnet in us-central1 to be
+    # IPV4_IPV6 with EXTERNAL IPv6 access (done out-of-band on 2026-10-24;
+    # the subnet is not managed here). No IPv6 ingress firewall rule exists,
+    # so nothing on the VM is reachable from the internet.
+    stack_type = "IPV4_IPV6"
+    ipv6_access_config {
+      network_tier = "PREMIUM"
+    }
   }
 
   tags = ["postgres-db"]
