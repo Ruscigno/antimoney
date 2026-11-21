@@ -20,6 +20,28 @@ Internet
 - Cloud Run reaches the DB via **VPC Direct Egress** — private IP only, no public exposure of Postgres.
 - Artifact Registry stores Docker images with cleanup: untagged images deleted, only last 5 tagged versions kept.
 
+## Shared VM (read before touching `antimoney-db` or the `default` network)
+
+Since 2026-10-24 the `antimoney-db` VM also hosts the WordPress site
+**segueretotodavida.com.br** (Nginx + PHP-FPM + MariaDB on `127.0.0.1:80`,
+published through a Cloudflare Tunnel, `cloudflared` systemd service). Its
+in-guest provisioning lives in the `Ruscigno/segue-reto-toda-vida` repository
+(`infra/gcp/`); this repository stays the owner of the VM itself.
+
+Consequences:
+
+- **Do not run `terraform destroy`** without a plan for the WordPress data
+  (`/var/www/segueretotodavida.com.br`, MariaDB, `/var/backups/wp`).
+- **Keep `stack_type = "IPV4_IPV6"` and `ipv6_access_config`** on the VM: they
+  are the VM's only outbound path (the ephemeral IPv4 is removed by
+  `deploy.sh`). Removing them kills apt, WordPress updates and the tunnel.
+- The project's `default` network was switched from auto to **custom subnet
+  mode** and the `us-central1` subnet got `stack_type=IPV4_IPV6`,
+  `ipv6-access-type=EXTERNAL`. Both are one-way changes done with `gcloud`;
+  Terraform only references the network by name.
+- Memory budget on the e2-micro (1 GB): Postgres ~140 MB, MariaDB ~100 MB,
+  PHP-FPM up to 4 workers, 2 GB swap file. Anything new on this VM must fit.
+
 ## Free Tier Constraints & Cost-Security Balance
 
 The DB VM must stay on `e2-micro` in `us-central1`, `us-east1`, or `us-west1` and use a `pd-standard` boot disk ≤ 30 GB to remain Always Free eligible. Do not change `machine_type`, `region`, or `disk.type` without understanding the billing impact.
